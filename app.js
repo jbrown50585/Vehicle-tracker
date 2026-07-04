@@ -1272,8 +1272,14 @@ function openPartModal(v, existing, presetCategory) {
       partNumber: modal.querySelector('#p-partnum').value.trim(),
     };
   }
-  modal.querySelector('#p-search-rockauto').addEventListener('click', () => window.open(rockAutoSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
-  modal.querySelector('#p-search-amazon').addEventListener('click', () => window.open(amazonSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
+  modal.querySelector('#p-search-rockauto').addEventListener('click', () => {
+    window.open(rockAutoSearchUrl(v, currentDraftPart()), '_blank', 'noopener');
+    modal.querySelector('#p-vendor').value = 'RockAuto';
+  });
+  modal.querySelector('#p-search-amazon').addEventListener('click', () => {
+    window.open(amazonSearchUrl(v, currentDraftPart()), '_blank', 'noopener');
+    modal.querySelector('#p-vendor').value = 'Amazon';
+  });
 
   function renderPreview() {
     preview.innerHTML = '';
