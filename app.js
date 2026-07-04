@@ -249,6 +249,25 @@ function computeFuelStats(v) {
 const MAINTENANCE_WARNING_DAYS = 14;
 const MAINTENANCE_WARNING_MILES = 500;
 
+const MAINTENANCE_PRESETS = [
+  { label: 'Oil & filter change', days: 180, miles: 5000 },
+  { label: 'Tire rotation', days: 180, miles: 5000 },
+  { label: 'Engine air filter', days: 365, miles: 15000 },
+  { label: 'Cabin air filter', days: 365, miles: 15000 },
+  { label: 'Brake fluid flush', days: 730, miles: 30000 },
+  { label: 'Coolant flush', days: 730, miles: 30000 },
+  { label: 'Transmission fluid change', days: 1095, miles: 30000 },
+  { label: 'Differential fluid change', days: 730, miles: 30000 },
+  { label: 'Spark plugs', days: 1095, miles: 30000 },
+  { label: 'Serpentine belt', days: 1825, miles: 60000 },
+  { label: 'Timing belt', days: 1825, miles: 60000 },
+  { label: 'Fuel filter', days: 1095, miles: 30000 },
+  { label: 'Power steering fluid', days: 730, miles: 30000 },
+  { label: 'PCV valve', days: 1095, miles: 30000 },
+  { label: 'Battery check/replace', days: 730, miles: null },
+  { label: 'Wiper blades', days: 365, miles: null },
+];
+
 function maintenanceStatus(v, item) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -1290,8 +1309,17 @@ function openMaintenanceModal(v, existing) {
   const modal = document.createElement('div');
   modal.className = 'modal';
   const isEdit = !!existing;
+  const matchedPreset = isEdit ? MAINTENANCE_PRESETS.find(p => p.label.toLowerCase() === existing.task.toLowerCase()) : null;
   modal.innerHTML = `
     <h2>${isEdit ? 'Edit maintenance item' : 'Add maintenance item'}</h2>
+    <div class="field">
+      <label>Common task</label>
+      <select id="mx-preset">
+        <option value="">Custom (type your own)</option>
+        ${MAINTENANCE_PRESETS.map((p, i) => `<option value="${i}" ${matchedPreset === p ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+      </select>
+      <div class="section-sub">Picking one fills in the suggested intervals below — tweak them if your vehicle or usage differs.</div>
+    </div>
     <div class="field"><label>Task</label><input type="text" id="mx-task" value="${isEdit ? escapeHtml(existing.task) : ''}" placeholder="Oil change"></div>
     <div class="field-row">
       <div class="field"><label>Repeat every (days)</label><input type="number" id="mx-interval-days" value="${isEdit ? existing.intervalDays || '' : ''}" placeholder="180"></div>
@@ -1308,6 +1336,13 @@ function openMaintenanceModal(v, existing) {
     </div>
   `;
   const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#mx-preset').addEventListener('change', (e) => {
+    if (e.target.value === '') return;
+    const preset = MAINTENANCE_PRESETS[parseInt(e.target.value, 10)];
+    modal.querySelector('#mx-task').value = preset.label;
+    modal.querySelector('#mx-interval-days').value = preset.days || '';
+    modal.querySelector('#mx-interval-miles').value = preset.miles || '';
+  });
   modal.querySelector('#mx-cancel').addEventListener('click', () => backdrop.remove());
   modal.querySelector('#mx-save').addEventListener('click', async () => {
     const task = modal.querySelector('#mx-task').value.trim();
