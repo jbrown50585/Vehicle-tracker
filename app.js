@@ -1273,8 +1273,12 @@ function renderMaintenanceSection(v) {
   const addBtn = document.createElement('button');
   addBtn.textContent = '+ Add item';
   addBtn.addEventListener('click', () => openMaintenanceModal(v));
+  const printBtn = document.createElement('button');
+  printBtn.textContent = 'Print maintenance history';
+  printBtn.addEventListener('click', () => printMaintenanceHistory(v));
   btnGroup.appendChild(mileageBtn);
   btnGroup.appendChild(addBtn);
+  btnGroup.appendChild(printBtn);
   secHeader.appendChild(btnGroup);
   section.appendChild(secHeader);
 
@@ -1325,6 +1329,66 @@ function renderMaintenanceSection(v) {
   });
   section.appendChild(table);
   return section;
+}
+
+function printMaintenanceHistory(v) {
+  const title = `${v.year} ${v.make} ${v.model}${v.trim ? ' ' + v.trim : ''}`;
+  const rows = v.maintenance.slice().map(item => {
+    const st = maintenanceStatus(v, item);
+    const intervalParts = [];
+    if (item.intervalDays) intervalParts.push(`${item.intervalDays} days`);
+    if (item.intervalMiles) intervalParts.push(`${item.intervalMiles.toLocaleString()} mi`);
+    const lastParts = [];
+    if (item.lastDoneDate) lastParts.push(formatDate(item.lastDoneDate));
+    if (item.lastDoneMileage != null) lastParts.push(`${item.lastDoneMileage.toLocaleString()} mi`);
+    return `
+      <tr>
+        <td>${escapeHtml(item.task)}</td>
+        <td>${escapeHtml(intervalParts.join(' / ') || '—')}</td>
+        <td>${escapeHtml(lastParts.join(' / ') || 'Never')}</td>
+        <td>${escapeHtml(st.label)}</td>
+        <td>${escapeHtml(item.notes || '')}</td>
+      </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)} — Maintenance History</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #111; padding: 40px; max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 2px; }
+  .meta { color: #555; font-size: 13px; margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ddd; font-size: 13px; }
+  th { text-transform: uppercase; font-size: 11px; color: #666; letter-spacing: 0.03em; }
+  .footer { margin-top: 32px; font-size: 11px; color: #999; }
+  @media print { body { padding: 20px; } }
+</style>
+</head>
+<body>
+  <h1>${escapeHtml(title)} — Maintenance History</h1>
+  <div class="meta">
+    ${v.vin ? `VIN: ${escapeHtml(v.vin)} &middot; ` : ''}${v.currentMileage != null ? `Current mileage: ${v.currentMileage.toLocaleString()} mi` : 'Mileage not recorded'}
+  </div>
+  ${v.maintenance.length === 0
+    ? '<p>No maintenance items recorded.</p>'
+    : `<table>
+        <thead><tr><th>Task</th><th>Interval</th><th>Last done</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`
+  }
+  <div class="footer">Generated ${new Date().toLocaleDateString()} from Vehicle Project Tracker</div>
+</body>
+</html>`;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) { alert('Please allow pop-ups to print the maintenance history.'); return; }
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
 }
 
 async function markMaintenanceDone(v, item) {
