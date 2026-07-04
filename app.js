@@ -71,7 +71,7 @@ function escapeHtml(str) {
 function dbVehicleToLocal(row) {
   return {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
-    startDate: row.start_date, targetDate: row.target_date,
+    startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
     phases: [], parts: [], labor: [], credits: [], journal: [],
   };
 }
@@ -293,6 +293,7 @@ function renderList() {
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
+      ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
       <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
       <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'}</div>
       <div class="timeframe">${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}</div>
@@ -324,6 +325,7 @@ function renderDetail(vehicleId) {
   const header = document.createElement('div');
   header.className = 'detail-header';
   header.innerHTML = `
+    ${v.coverPhoto ? `<img class="lazy-photo detail-cover" data-photo-path="${v.coverPhoto}">` : ''}
     <div>
       <h2>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h2>
       <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'}</div>
@@ -364,7 +366,7 @@ function renderDetail(vehicleId) {
 
 async function deleteVehicle(v) {
   if (!confirm(`Delete "${v.year} ${v.make} ${v.model}" and everything in it? This cannot be undone.`)) return;
-  const photoPaths = [...v.parts.map(p => p.photo), ...v.journal.flatMap(j => j.photos)];
+  const photoPaths = [v.coverPhoto, ...v.parts.map(p => p.photo), ...v.journal.flatMap(j => j.photos)];
   await deletePhotos(photoPaths);
   const { error } = await supabase.from('vehicles').delete().eq('id', v.id);
   if (error) { alert('Could not delete: ' + error.message); return; }
@@ -565,7 +567,7 @@ function renderPartsTab(v) {
   const wrap = document.createElement('div');
   const header = document.createElement('div');
   header.className = 'section-header';
-  header.innerHTML = `<h3>Parts list</h3>`;
+  header.innerHTML = `<h3>Shopping list</h3><span class="section-sub">Organized by system — add items to any section</span>`;
   const addBtn = document.createElement('button');
   addBtn.className = 'primary';
   addBtn.textContent = '+ Add part';
@@ -573,69 +575,85 @@ function renderPartsTab(v) {
   header.appendChild(addBtn);
   wrap.appendChild(header);
 
-  const filters = currentView.partFilters || { category: 'all', status: 'all' };
+  const filters = currentView.partFilters || { status: 'all' };
   currentView.partFilters = filters;
 
   const filterRow = document.createElement('div');
   filterRow.className = 'filter-row';
-  const catSelect = document.createElement('select');
-  catSelect.innerHTML = '<option value="all">All categories</option>' + CATEGORIES.map(c => `<option value="${c}" ${filters.category === c ? 'selected' : ''}>${c}</option>`).join('');
-  catSelect.value = filters.category;
-  catSelect.addEventListener('change', () => { filters.category = catSelect.value; render(); });
   const statSelect = document.createElement('select');
   statSelect.innerHTML = '<option value="all">All statuses</option>' + STATUSES.map(s => `<option value="${s.key}" ${filters.status === s.key ? 'selected' : ''}>${s.label}</option>`).join('');
   statSelect.value = filters.status;
   statSelect.addEventListener('change', () => { filters.status = statSelect.value; render(); });
-  filterRow.appendChild(catSelect);
   filterRow.appendChild(statSelect);
   wrap.appendChild(filterRow);
 
-  const filtered = v.parts.filter(p =>
-    (filters.category === 'all' || p.category === filters.category) &&
-    (filters.status === 'all' || p.status === filters.status)
-  );
-
-  if (filtered.length === 0) {
+  if (v.parts.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = v.parts.length === 0 ? 'No parts added yet.' : 'No parts match this filter.';
+    empty.textContent = 'No parts added yet. Add items to any section below to start your shopping list.';
     wrap.appendChild(empty);
-    return wrap;
   }
 
-  const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Part</th><th>Category</th><th>Cost</th><th>Status</th><th>Phase</th><th>Vendor</th><th></th></tr></thead><tbody></tbody>';
-  const tbody = table.querySelector('tbody');
-  filtered.slice().sort((a, b) => a.status.localeCompare(b.status)).forEach(p => {
-    const st = statusInfo(p.status);
-    const phase = v.phases.find(ph => ph.id === p.phaseId);
-    const tr = document.createElement('tr');
-    if (p.status === 'returned') tr.className = 'muted-row';
-    tr.innerHTML = `
-      <td>${p.photo ? `<img class="lazy-photo" data-photo-path="${p.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:6px;cursor:pointer;background:var(--gridline)" data-photo-click>` : ''}${escapeHtml(p.name)}</td>
-      <td>${escapeHtml(p.category)}</td>
-      <td class="cost ${p.status === 'returned' ? 'strike' : ''}">${money(p.cost)}</td>
-      <td><span class="chip" style="color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span></td>
-      <td>${escapeHtml(phase ? phase.name : '')}</td>
-      <td>${escapeHtml(p.vendor || '')}</td>
-      <td class="row-actions"></td>
-    `;
-    const photoImg = tr.querySelector('[data-photo-click]');
-    if (photoImg) photoImg.addEventListener('click', () => openLightboxForPath(p.photo));
-    const cell = tr.querySelector('.row-actions');
-    const editBtn = document.createElement('button');
-    editBtn.className = 'small';
-    editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', () => openPartModal(v, p));
-    const delBtn = document.createElement('button');
-    delBtn.className = 'small danger';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', () => deletePart(v, p));
-    cell.appendChild(editBtn);
-    cell.appendChild(delBtn);
-    tbody.appendChild(tr);
+  CATEGORIES.forEach(category => {
+    const items = v.parts
+      .filter(p => p.category === category && (filters.status === 'all' || p.status === filters.status))
+      .sort((a, b) => a.status.localeCompare(b.status));
+
+    const section = document.createElement('div');
+    section.className = 'section';
+    const secHeader = document.createElement('div');
+    secHeader.className = 'section-header';
+    secHeader.innerHTML = `<h3>${escapeHtml(category)}</h3><span class="section-sub">${items.length} item${items.length === 1 ? '' : 's'}</span>`;
+    const secAddBtn = document.createElement('button');
+    secAddBtn.className = 'small';
+    secAddBtn.textContent = '+ Add';
+    secAddBtn.addEventListener('click', () => openPartModal(v, null, category));
+    secHeader.appendChild(secAddBtn);
+    section.appendChild(secHeader);
+
+    if (items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.style.padding = '16px';
+      empty.textContent = 'Nothing here yet.';
+      section.appendChild(empty);
+    } else {
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>Part</th><th>Cost</th><th>Status</th><th>Phase</th><th>Vendor</th><th></th></tr></thead><tbody></tbody>';
+      const tbody = table.querySelector('tbody');
+      items.forEach(p => {
+        const st = statusInfo(p.status);
+        const phase = v.phases.find(ph => ph.id === p.phaseId);
+        const tr = document.createElement('tr');
+        if (p.status === 'returned') tr.className = 'muted-row';
+        tr.innerHTML = `
+          <td>${p.photo ? `<img class="lazy-photo" data-photo-path="${p.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:6px;cursor:pointer;background:var(--gridline)" data-photo-click>` : ''}${escapeHtml(p.name)}</td>
+          <td class="cost ${p.status === 'returned' ? 'strike' : ''}">${money(p.cost)}</td>
+          <td><span class="chip" style="color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span></td>
+          <td>${escapeHtml(phase ? phase.name : '')}</td>
+          <td>${escapeHtml(p.vendor || '')}</td>
+          <td class="row-actions"></td>
+        `;
+        const photoImg = tr.querySelector('[data-photo-click]');
+        if (photoImg) photoImg.addEventListener('click', () => openLightboxForPath(p.photo));
+        const cell = tr.querySelector('.row-actions');
+        const editBtn = document.createElement('button');
+        editBtn.className = 'small';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => openPartModal(v, p));
+        const delBtn = document.createElement('button');
+        delBtn.className = 'small danger';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => deletePart(v, p));
+        cell.appendChild(editBtn);
+        cell.appendChild(delBtn);
+        tbody.appendChild(tr);
+      });
+      section.appendChild(table);
+    }
+    wrap.appendChild(section);
   });
-  wrap.appendChild(table);
+
   return wrap;
 }
 
@@ -772,6 +790,8 @@ function openVehicleModal(existing) {
       <div class="field"><label>Trim</label><input type="text" id="f-trim" value="${isEdit ? escapeHtml(existing.trim || '') : ''}" placeholder="TRD Off-Road"></div>
     </div>
     <div class="field"><label>VIN</label><input type="text" id="f-vin" value="${isEdit ? escapeHtml(existing.vin || '') : ''}" placeholder="17-character VIN"></div>
+    <div class="field"><label>Cover photo</label><input type="file" id="f-photo" accept="image/*"></div>
+    <div id="f-photo-preview"></div>
     <div class="field-row">
       <div class="field"><label>Start date</label><input type="date" id="f-start" value="${isEdit ? existing.startDate || '' : ''}"></div>
       <div class="field"><label>Target finish date</label><input type="date" id="f-target" value="${isEdit ? existing.targetDate || '' : ''}"></div>
@@ -833,6 +853,49 @@ function openVehicleModal(existing) {
     }
   }
 
+  const photoState = { path: isEdit ? existing.coverPhoto : null, blob: null, previewUrl: null };
+  const photoPreview = modal.querySelector('#f-photo-preview');
+  function renderPhotoPreview() {
+    photoPreview.innerHTML = '';
+    if (photoState.blob) {
+      const item = document.createElement('div');
+      item.className = 'photo-remove-item';
+      item.style.marginBottom = '10px';
+      const img = document.createElement('img');
+      img.src = photoState.previewUrl;
+      item.appendChild(img);
+      const rm = document.createElement('button');
+      rm.textContent = 'x';
+      rm.addEventListener('click', () => { photoState.blob = null; photoState.previewUrl = null; renderPhotoPreview(); });
+      item.appendChild(rm);
+      photoPreview.appendChild(item);
+    } else if (photoState.path) {
+      const item = document.createElement('div');
+      item.className = 'photo-remove-item';
+      item.style.marginBottom = '10px';
+      const img = document.createElement('img');
+      img.className = 'lazy-photo';
+      img.setAttribute('data-photo-path', photoState.path);
+      item.appendChild(img);
+      const rm = document.createElement('button');
+      rm.textContent = 'x';
+      rm.addEventListener('click', () => { photoState.path = null; renderPhotoPreview(); });
+      item.appendChild(rm);
+      photoPreview.appendChild(item);
+      hydratePhotos(photoPreview);
+    }
+  }
+  renderPhotoPreview();
+  modal.querySelector('#f-photo').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const blob = await resizeImageToBlob(file, 900, 0.72);
+    photoState.blob = blob;
+    photoState.path = null;
+    photoState.previewUrl = URL.createObjectURL(blob);
+    renderPhotoPreview();
+  });
+
   modal.querySelector('#f-cancel').addEventListener('click', () => backdrop.remove());
   modal.querySelector('#f-save').addEventListener('click', async () => {
     const year = modal.querySelector('#f-year').value;
@@ -849,16 +912,32 @@ function openVehicleModal(existing) {
       target_date: modal.querySelector('#f-target').value || null,
     };
     if (isEdit) {
+      let finalCoverPath = photoState.path;
+      const oldCover = existing.coverPhoto || null;
+      if (photoState.blob) {
+        finalCoverPath = await uploadPhoto(existing.id, photoState.blob);
+        if (oldCover) await deletePhotos([oldCover]);
+      } else if (oldCover && !photoState.path) {
+        await deletePhotos([oldCover]);
+        finalCoverPath = null;
+      }
+      fields.cover_photo_path = finalCoverPath;
       const { error } = await supabase.from('vehicles').update(fields).eq('id', existing.id);
       if (error) { alert('Could not save: ' + error.message); saveBtn.disabled = false; return; }
-      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date });
+      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, coverPhoto: finalCoverPath });
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
       const { data: vRow, error } = await supabase.from('vehicles').insert(fields).select().single();
       if (error) { alert('Could not create project: ' + error.message); saveBtn.disabled = false; return; }
       const { data: phRow, error: phErr } = await supabase.from('phases').insert({ vehicle_id: vRow.id, name: 'General', budget }).select().single();
       if (phErr) { alert('Could not create budget phase: ' + phErr.message); saveBtn.disabled = false; return; }
+      let coverPath = null;
+      if (photoState.blob) {
+        coverPath = await uploadPhoto(vRow.id, photoState.blob);
+        if (coverPath) await supabase.from('vehicles').update({ cover_photo_path: coverPath }).eq('id', vRow.id);
+      }
       const localVehicle = dbVehicleToLocal(vRow);
+      localVehicle.coverPhoto = coverPath;
       localVehicle.phases = [dbPhaseToLocal(phRow)];
       data.vehicles.push(localVehicle);
     }
@@ -900,16 +979,17 @@ function openPhaseModal(v, existing) {
   });
 }
 
-function openPartModal(v, existing) {
+function openPartModal(v, existing, presetCategory) {
   const modal = document.createElement('div');
   modal.className = 'modal';
   const isEdit = !!existing;
+  const defaultCategory = isEdit ? existing.category : presetCategory;
   const photoState = { path: isEdit ? existing.photo : null, blob: null, previewUrl: null };
   modal.innerHTML = `
     <h2>${isEdit ? 'Edit part' : 'Add part'}</h2>
     <div class="field"><label>Part name</label><input type="text" id="p-name" value="${isEdit ? escapeHtml(existing.name) : ''}" placeholder="Front brake pads"></div>
     <div class="field-row">
-      <div class="field"><label>Category</label><select id="p-category">${CATEGORIES.map(c => `<option value="${c}" ${isEdit && existing.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Category</label><select id="p-category">${CATEGORIES.map(c => `<option value="${c}" ${defaultCategory === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
       <div class="field"><label>Cost ($)</label><input type="number" step="0.01" id="p-cost" value="${isEdit ? existing.cost : ''}" placeholder="120.00"></div>
     </div>
     <div class="field-row">
