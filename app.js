@@ -1598,6 +1598,8 @@ async function applySession(session, options = {}) {
   render();
 }
 
+let bootedOnce = false;
+
 async function boot() {
   const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 8000));
   const sessionCheck = supabase.auth.getSession()
@@ -1610,13 +1612,19 @@ async function boot() {
     authReady = true;
     authError = 'Could not reach the login service. Check your connection and reload the page.';
     render();
+    bootedOnce = true;
     return;
   }
   await applySession(result, { restoreRoute: true });
+  bootedOnce = true;
 }
 
 supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'INITIAL_SESSION') return;
+  // boot() owns the very first load (including restoring the URL's route).
+  // Supabase can fire more than one event while restoring a persisted session
+  // (e.g. INITIAL_SESSION then SIGNED_IN) — ignore all of them until boot()
+  // has finished, so a late event can't stomp on the restored route.
+  if (!bootedOnce) return;
   applySession(session);
 });
 
