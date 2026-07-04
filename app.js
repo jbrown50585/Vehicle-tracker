@@ -485,6 +485,16 @@ function updateHeaderForAuth() {
 function renderAuthScreen() {
   const wrap = document.createElement('div');
   wrap.className = 'auth-wrap';
+
+  const hero = document.createElement('div');
+  hero.className = 'auth-hero';
+  hero.innerHTML = `
+    <img src="/icons/icon-512.png" class="auth-hero-icon" alt="">
+    <h1>Vehicle Project Tracker</h1>
+    <p>Track every restoration and repair — parts, budget, maintenance, and progress, all in one place.</p>
+  `;
+  wrap.appendChild(hero);
+
   const box = document.createElement('div');
   box.className = 'auth-box';
   const isSignUp = authMode === 'signup';
