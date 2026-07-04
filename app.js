@@ -94,6 +94,41 @@ function rockAutoSearchUrl(v, p) {
   if (p.partNumber) return `https://www.rockauto.com/en/partsearch/?partnum=${encodeURIComponent(p.partNumber)}`;
   return `https://www.google.com/search?q=${encodeURIComponent('site:rockauto.com ' + partSearchQuery(v, p))}`;
 }
+
+async function openEbayModal(v, p) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `<h2>eBay results</h2><div id="ebay-results" class="section-sub">Searching…</div><div class="modal-actions"><button id="ebay-close">Close</button></div>`;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#ebay-close').addEventListener('click', () => backdrop.remove());
+  const resultsEl = modal.querySelector('#ebay-results');
+  try {
+    const query = partSearchQuery(v, p);
+    const res = await fetch(`/api/ebay-search?q=${encodeURIComponent(query)}`);
+    const json = await res.json();
+    if (!res.ok) { resultsEl.textContent = json.error || 'Search failed.'; return; }
+    if (!json.items || json.items.length === 0) { resultsEl.textContent = 'No results found.'; return; }
+    resultsEl.className = '';
+    resultsEl.innerHTML = '';
+    json.items.forEach((item) => {
+      const row = document.createElement('a');
+      row.href = item.itemUrl;
+      row.target = '_blank';
+      row.rel = 'noopener';
+      row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--gridline); text-decoration:none; color:inherit;';
+      row.innerHTML = `
+        ${item.imageUrl ? `<img src="${item.imageUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex:none;">` : ''}
+        <div style="flex:1">
+          <div style="font-size:13px">${escapeHtml(item.title)}</div>
+          <div style="font-size:12px; color:var(--text-muted)">${item.condition ? escapeHtml(item.condition) + ' · ' : ''}${item.price ? escapeHtml(item.price) : ''}</div>
+        </div>
+      `;
+      resultsEl.appendChild(row);
+    });
+  } catch (err) {
+    resultsEl.textContent = 'Search failed: ' + err.message;
+  }
+}
 function dbLaborToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, date: row.date, description: row.description, hours: Number(row.hours), paid: row.paid, amount: Number(row.amount) };
 }
@@ -727,6 +762,10 @@ function renderPartsTab(v) {
         const photoImg = tr.querySelector('[data-photo-click]');
         if (photoImg) photoImg.addEventListener('click', () => openLightboxForPath(p.photo));
         const cell = tr.querySelector('.row-actions');
+        const ebayBtn = document.createElement('button');
+        ebayBtn.className = 'small';
+        ebayBtn.textContent = 'eBay';
+        ebayBtn.addEventListener('click', () => openEbayModal(v, p));
         const raBtn = document.createElement('button');
         raBtn.className = 'small';
         raBtn.textContent = 'RockAuto';
@@ -735,6 +774,7 @@ function renderPartsTab(v) {
         amzBtn.className = 'small';
         amzBtn.textContent = 'Amazon';
         amzBtn.addEventListener('click', () => window.open(amazonSearchUrl(v, p), '_blank', 'noopener'));
+        cell.appendChild(ebayBtn);
         cell.appendChild(raBtn);
         cell.appendChild(amzBtn);
         const editBtn = document.createElement('button');
@@ -1220,6 +1260,7 @@ function openPartModal(v, existing, presetCategory) {
     <div class="field"><label>Photo (receipt or part)</label><input type="file" id="p-photo" accept="image/*"></div>
     <div id="p-photo-preview"></div>
     <div class="field-row">
+      <button type="button" id="p-search-ebay" class="small">Search eBay</button>
       <button type="button" id="p-search-rockauto" class="small">Search RockAuto</button>
       <button type="button" id="p-search-amazon" class="small">Search Amazon</button>
     </div>
@@ -1237,6 +1278,7 @@ function openPartModal(v, existing, presetCategory) {
       partNumber: modal.querySelector('#p-partnum').value.trim(),
     };
   }
+  modal.querySelector('#p-search-ebay').addEventListener('click', () => openEbayModal(v, currentDraftPart()));
   modal.querySelector('#p-search-rockauto').addEventListener('click', () => window.open(rockAutoSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
   modal.querySelector('#p-search-amazon').addEventListener('click', () => window.open(amazonSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
 
