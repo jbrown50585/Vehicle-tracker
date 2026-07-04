@@ -113,7 +113,7 @@ function dbVehicleToLocal(row) {
   return {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [],
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -178,9 +178,12 @@ function dbJournalToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id,
 function dbChecklistToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, category: row.category, task: row.task, done: row.done, doneDate: row.done_date, position: row.position };
 }
+function dbFavoriteToLocal(row) {
+  return { id: row.id, vehicleId: row.vehicle_id, name: row.name, partNumber: row.part_number, vendor: row.vendor, category: row.category, notes: row.notes };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -188,6 +191,7 @@ async function loadAllData() {
     supabase.from('credits').select('*'),
     supabase.from('journal_entries').select('*'),
     supabase.from('checklist_items').select('*'),
+    supabase.from('favorite_parts').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -197,6 +201,7 @@ async function loadAllData() {
     v.credits = (creditsRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCreditToLocal);
     v.journal = (journalRes.data || []).filter(r => r.vehicle_id === v.id).map(dbJournalToLocal);
     v.checklist = (checklistRes.data || []).filter(r => r.vehicle_id === v.id).map(dbChecklistToLocal);
+    v.favorites = (favoritesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFavoriteToLocal);
   });
   data = { vehicles };
 }
@@ -727,8 +732,145 @@ async function deleteCredit(v, c) {
 
 // --- Parts tab ---
 
+function renderFavoritesSection(v) {
+  const section = document.createElement('div');
+  section.className = 'section';
+  const secHeader = document.createElement('div');
+  secHeader.className = 'section-header';
+  secHeader.innerHTML = `<h3>★ Favorites</h3><span class="section-sub">Parts you buy again and again — save the part number once, reuse it anytime</span>`;
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add favorite';
+  addBtn.addEventListener('click', () => openFavoriteModal(v));
+  secHeader.appendChild(addBtn);
+  section.appendChild(secHeader);
+
+  if (v.favorites.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No favorites yet. Star a part below once you\'ve found the right one, or add one directly.';
+    section.appendChild(empty);
+    return section;
+  }
+
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Part</th><th>Part #</th><th>Vendor</th><th>Category</th><th></th></tr></thead><tbody></tbody>';
+  const tbody = table.querySelector('tbody');
+  v.favorites.forEach(fav => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(fav.name)}</td>
+      <td>${escapeHtml(fav.partNumber || '')}</td>
+      <td>${escapeHtml(fav.vendor || '')}</td>
+      <td>${escapeHtml(fav.category)}</td>
+      <td class="row-actions"></td>
+    `;
+    const cell = tr.querySelector('.row-actions');
+    const raBtn = document.createElement('button');
+    raBtn.className = 'small';
+    raBtn.textContent = 'RockAuto';
+    raBtn.addEventListener('click', () => window.open(rockAutoSearchUrl(v, fav), '_blank', 'noopener'));
+    const amzBtn = document.createElement('button');
+    amzBtn.className = 'small';
+    amzBtn.textContent = 'Amazon';
+    amzBtn.addEventListener('click', () => window.open(amazonSearchUrl(v, fav), '_blank', 'noopener'));
+    const addToListBtn = document.createElement('button');
+    addToListBtn.className = 'small primary';
+    addToListBtn.textContent = '+ To shopping list';
+    addToListBtn.addEventListener('click', () => addFavoriteToShoppingList(v, fav));
+    const editBtn = document.createElement('button');
+    editBtn.className = 'small';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openFavoriteModal(v, fav));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'small danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => deleteFavorite(v, fav));
+    cell.appendChild(raBtn);
+    cell.appendChild(amzBtn);
+    cell.appendChild(addToListBtn);
+    cell.appendChild(editBtn);
+    cell.appendChild(delBtn);
+    tbody.appendChild(tr);
+  });
+  section.appendChild(table);
+  return section;
+}
+
+async function addFavoriteToShoppingList(v, fav) {
+  const phaseId = v.phases[0].id;
+  const fields = {
+    name: fav.name, category: fav.category, cost: 0, status: 'needed',
+    phase_id: phaseId, vendor: fav.vendor || '', part_number: fav.partNumber || '', notes: fav.notes || '', photo_path: null,
+  };
+  const { data: row, error } = await supabase.from('parts').insert({ vehicle_id: v.id, ...fields }).select().single();
+  if (error) { alert('Could not add to shopping list: ' + error.message); return; }
+  v.parts.push(dbPartToLocal(row));
+  render();
+}
+
+async function deleteFavorite(v, fav) {
+  if (!confirm(`Remove "${fav.name}" from favorites?`)) return;
+  const { error } = await supabase.from('favorite_parts').delete().eq('id', fav.id);
+  if (error) { alert('Could not delete: ' + error.message); return; }
+  v.favorites = v.favorites.filter(x => x.id !== fav.id);
+  render();
+}
+
+async function addPartToFavorites(v, p) {
+  const fields = { name: p.name, part_number: p.partNumber || '', vendor: p.vendor || '', category: p.category, notes: p.notes || '' };
+  const { data: row, error } = await supabase.from('favorite_parts').insert({ vehicle_id: v.id, ...fields }).select().single();
+  if (error) { alert('Could not save favorite: ' + error.message); return; }
+  v.favorites.push(dbFavoriteToLocal(row));
+  render();
+}
+
+function openFavoriteModal(v, existing) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  const isEdit = !!existing;
+  modal.innerHTML = `
+    <h2>${isEdit ? 'Edit favorite' : 'Add favorite'}</h2>
+    <div class="field"><label>Part name</label><input type="text" id="fav-name" value="${isEdit ? escapeHtml(existing.name) : ''}" placeholder="Oil filter"></div>
+    <div class="field-row">
+      <div class="field"><label>Category</label><select id="fav-category">${CATEGORIES.map(c => `<option value="${c}" ${isEdit && existing.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Part number / SKU</label><input type="text" id="fav-partnum" value="${isEdit ? escapeHtml(existing.partNumber || '') : ''}" placeholder="e.g. PH3593A"></div>
+    </div>
+    <div class="field"><label>Vendor</label><input type="text" id="fav-vendor" value="${isEdit ? escapeHtml(existing.vendor || '') : ''}" placeholder="RockAuto, Amazon..."></div>
+    <div class="field"><label>Notes</label><input type="text" id="fav-notes" value="${isEdit ? escapeHtml(existing.notes || '') : ''}"></div>
+    <div class="modal-actions">
+      <button id="fav-cancel">Cancel</button>
+      <button class="primary" id="fav-save">${isEdit ? 'Save changes' : 'Add favorite'}</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#fav-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#fav-save').addEventListener('click', async () => {
+    const name = modal.querySelector('#fav-name').value.trim();
+    if (!name) { alert('Part name is required.'); return; }
+    const fields = {
+      name,
+      category: modal.querySelector('#fav-category').value,
+      part_number: modal.querySelector('#fav-partnum').value.trim(),
+      vendor: modal.querySelector('#fav-vendor').value.trim(),
+      notes: modal.querySelector('#fav-notes').value.trim(),
+    };
+    if (isEdit) {
+      const { error } = await supabase.from('favorite_parts').update(fields).eq('id', existing.id);
+      if (error) { alert('Could not save: ' + error.message); return; }
+      Object.assign(existing, { name, category: fields.category, partNumber: fields.part_number, vendor: fields.vendor, notes: fields.notes });
+    } else {
+      const { data: row, error } = await supabase.from('favorite_parts').insert({ vehicle_id: v.id, ...fields }).select().single();
+      if (error) { alert('Could not add favorite: ' + error.message); return; }
+      v.favorites.push(dbFavoriteToLocal(row));
+    }
+    backdrop.remove();
+    render();
+  });
+}
+
 function renderPartsTab(v) {
   const wrap = document.createElement('div');
+  wrap.appendChild(renderFavoritesSection(v));
   const header = document.createElement('div');
   header.className = 'section-header';
   header.innerHTML = `<h3>Shopping list</h3><span class="section-sub">Organized by system — add items to any section</span>`;
@@ -810,8 +952,14 @@ function renderPartsTab(v) {
         amzBtn.className = 'small';
         amzBtn.textContent = 'Amazon';
         amzBtn.addEventListener('click', () => window.open(amazonSearchUrl(v, p), '_blank', 'noopener'));
+        const favBtn = document.createElement('button');
+        favBtn.className = 'small';
+        favBtn.textContent = '☆ Favorite';
+        favBtn.title = 'Save to favorites for quick reuse later';
+        favBtn.addEventListener('click', () => addPartToFavorites(v, p));
         cell.appendChild(raBtn);
         cell.appendChild(amzBtn);
+        cell.appendChild(favBtn);
         const editBtn = document.createElement('button');
         editBtn.className = 'small';
         editBtn.textContent = 'Edit';
