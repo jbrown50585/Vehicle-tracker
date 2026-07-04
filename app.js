@@ -114,6 +114,8 @@ function dbVehicleToLocal(row) {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
     vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
+    purchasePrice: row.purchase_price != null ? Number(row.purchase_price) : null,
+    salePrice: row.sale_price != null ? Number(row.sale_price) : null,
     phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [],
   };
 }
@@ -378,6 +380,8 @@ function paidLaborTotal(v) { return v.labor.filter(l => l.paid).reduce((s, l) =>
 function creditsTotal(v) { return v.credits.reduce((s, c) => s + Number(c.amount || 0), 0); }
 function totalSpent(v) { return partsSpent(v) + paidLaborTotal(v); }
 function remainingBudget(v) { return totalBudget(v) - totalSpent(v) + creditsTotal(v); }
+function netInvested(v) { return (v.purchasePrice || 0) + totalSpent(v) - creditsTotal(v); }
+function projectProfit(v) { return (v.salePrice || 0) - netInvested(v); }
 function phaseSpent(v, phaseId) {
   return v.parts.filter(p => p.phaseId === phaseId && SPENT_STATUSES.includes(p.status)).reduce((s, p) => s + Number(p.cost || 0), 0);
 }
@@ -671,6 +675,34 @@ function renderBudgetTab(v) {
     <div class="status-label"><span class="status-dot" style="background:${status.color}"></span>${status.label}${remaining - planned < 0 ? ' — buying everything still planned would put you over' : ''}</div>
   `;
   wrap.appendChild(summary);
+
+  // Sale & profit
+  const saleSection = document.createElement('div');
+  saleSection.className = 'section';
+  const saleHeader = document.createElement('div');
+  saleHeader.className = 'section-header';
+  saleHeader.innerHTML = `<h3>Sale &amp; profit</h3><span class="section-sub">Purchase price + build spending vs. what you sold it for</span>`;
+  const editSaleBtn = document.createElement('button');
+  editSaleBtn.textContent = 'Edit purchase/sale price';
+  editSaleBtn.addEventListener('click', () => openVehicleModal(v));
+  saleHeader.appendChild(editSaleBtn);
+  saleSection.appendChild(saleHeader);
+
+  const invested = netInvested(v);
+  const profit = projectProfit(v);
+  const hasSalePrice = v.salePrice != null;
+  const saleSummary = document.createElement('div');
+  saleSummary.className = 'summary-panel';
+  saleSummary.innerHTML = `
+    <div class="summary-figures">
+      <div class="figure"><div class="value">${v.purchasePrice != null ? money(v.purchasePrice) : '—'}</div><div class="label">Purchase price</div></div>
+      <div class="figure"><div class="value">${money(invested)}</div><div class="label">Net invested (purchase + build − credits)</div></div>
+      <div class="figure"><div class="value">${hasSalePrice ? money(v.salePrice) : '—'}</div><div class="label">Sale price</div></div>
+      <div class="figure"><div class="value" style="color:${hasSalePrice ? (profit >= 0 ? 'var(--good)' : 'var(--critical)') : 'var(--text-muted)'}">${hasSalePrice ? money(profit) : 'Not sold yet'}</div><div class="label">Profit</div></div>
+    </div>
+  `;
+  saleSection.appendChild(saleSummary);
+  wrap.appendChild(saleSection);
 
   // Phases
   const phaseSection = document.createElement('div');
@@ -1644,6 +1676,10 @@ function openVehicleModal(existing) {
       <div class="field" id="f-target-field" style="${vehicleType === 'maintenance' ? 'display:none' : ''}"><label>Target finish date</label><input type="date" id="f-target" value="${isEdit ? existing.targetDate || '' : ''}"></div>
     </div>
     ${isEdit ? '' : `<div class="field"><label>Starting budget ($)</label><input type="number" step="0.01" id="f-budget" placeholder="5000"></div><div class="section-sub">You can split this into more phases later from the Budget tab.</div>`}
+    <div class="field-row">
+      <div class="field"><label>Purchase price ($)</label><input type="number" step="0.01" id="f-purchase" value="${isEdit && existing.purchasePrice != null ? existing.purchasePrice : ''}" placeholder="What you paid for it"></div>
+      <div class="field"><label>Sale price ($)</label><input type="number" step="0.01" id="f-sale" value="${isEdit && existing.salePrice != null ? existing.salePrice : ''}" placeholder="Leave blank until sold"></div>
+    </div>
     <div class="modal-actions">
       <button id="f-cancel">Cancel</button>
       <button class="primary" id="f-save">${isEdit ? 'Save changes' : 'Create project'}</button>
@@ -1766,6 +1802,8 @@ function openVehicleModal(existing) {
       start_date: modal.querySelector('#f-start').value || null,
       target_date: selectedType === 'maintenance' ? null : (modal.querySelector('#f-target').value || null),
       vehicle_type: selectedType,
+      purchase_price: modal.querySelector('#f-purchase').value !== '' ? parseFloat(modal.querySelector('#f-purchase').value) : null,
+      sale_price: modal.querySelector('#f-sale').value !== '' ? parseFloat(modal.querySelector('#f-sale').value) : null,
     };
     if (isEdit) {
       let finalCoverPath = photoState.path;
@@ -1780,7 +1818,7 @@ function openVehicleModal(existing) {
       fields.cover_photo_path = finalCoverPath;
       const { error } = await supabase.from('vehicles').update(fields).eq('id', existing.id);
       if (error) { alert('Could not save: ' + error.message); saveBtn.disabled = false; return; }
-      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath });
+      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
       const { data: vRow, error } = await supabase.from('vehicles').insert(fields).select().single();
