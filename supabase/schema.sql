@@ -16,10 +16,12 @@ create table if not exists vehicles (
   target_date date,
   cover_photo_path text,
   vehicle_type text not null default 'project',
+  current_mileage int,
   created_at timestamptz not null default now()
 );
 alter table vehicles add column if not exists cover_photo_path text;
 alter table vehicles add column if not exists vehicle_type text not null default 'project';
+alter table vehicles add column if not exists current_mileage int;
 
 create table if not exists phases (
   id uuid primary key default gen_random_uuid(),
@@ -71,6 +73,18 @@ create table if not exists journal_entries (
   created_at timestamptz not null default now()
 );
 
+create table if not exists maintenance_items (
+  id uuid primary key default gen_random_uuid(),
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  task text not null,
+  interval_days int,
+  interval_miles int,
+  last_done_date date,
+  last_done_mileage int,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists favorite_parts (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
@@ -103,6 +117,7 @@ alter table credits enable row level security;
 alter table journal_entries enable row level security;
 alter table checklist_items enable row level security;
 alter table favorite_parts enable row level security;
+alter table maintenance_items enable row level security;
 
 drop policy if exists "own vehicles select" on vehicles;
 drop policy if exists "own vehicles insert" on vehicles;
@@ -175,6 +190,15 @@ create policy "own favorites select" on favorite_parts for select using (vehicle
 create policy "own favorites insert" on favorite_parts for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own favorites update" on favorite_parts for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own favorites delete" on favorite_parts for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+
+drop policy if exists "own maintenance select" on maintenance_items;
+drop policy if exists "own maintenance insert" on maintenance_items;
+drop policy if exists "own maintenance update" on maintenance_items;
+drop policy if exists "own maintenance delete" on maintenance_items;
+create policy "own maintenance select" on maintenance_items for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own maintenance insert" on maintenance_items for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own maintenance update" on maintenance_items for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own maintenance delete" on maintenance_items for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
 -- Storage bucket for part/journal photos. Private bucket; files are stored under
 -- a path starting with the owning user's id, and the policies below only allow

@@ -113,8 +113,8 @@ function dbVehicleToLocal(row) {
   return {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
-    vehicleType: row.vehicle_type || 'project',
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [],
+    vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -182,9 +182,16 @@ function dbChecklistToLocal(row) {
 function dbFavoriteToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, name: row.name, partNumber: row.part_number, vendor: row.vendor, category: row.category, notes: row.notes };
 }
+function dbMaintenanceToLocal(row) {
+  return {
+    id: row.id, vehicleId: row.vehicle_id, task: row.task,
+    intervalDays: row.interval_days, intervalMiles: row.interval_miles,
+    lastDoneDate: row.last_done_date, lastDoneMileage: row.last_done_mileage, notes: row.notes,
+  };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -193,6 +200,7 @@ async function loadAllData() {
     supabase.from('journal_entries').select('*'),
     supabase.from('checklist_items').select('*'),
     supabase.from('favorite_parts').select('*'),
+    supabase.from('maintenance_items').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -203,8 +211,43 @@ async function loadAllData() {
     v.journal = (journalRes.data || []).filter(r => r.vehicle_id === v.id).map(dbJournalToLocal);
     v.checklist = (checklistRes.data || []).filter(r => r.vehicle_id === v.id).map(dbChecklistToLocal);
     v.favorites = (favoritesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFavoriteToLocal);
+    v.maintenance = (maintenanceRes.data || []).filter(r => r.vehicle_id === v.id).map(dbMaintenanceToLocal);
   });
   data = { vehicles };
+}
+
+// --- Maintenance due-tracking ---
+
+const MAINTENANCE_WARNING_DAYS = 14;
+const MAINTENANCE_WARNING_MILES = 500;
+
+function maintenanceStatus(v, item) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let daysUntil = null;
+  if (item.lastDoneDate && item.intervalDays) {
+    const dueDate = new Date(item.lastDoneDate + 'T00:00:00');
+    dueDate.setDate(dueDate.getDate() + item.intervalDays);
+    daysUntil = Math.round((dueDate - today) / 86400000);
+  }
+  let milesUntil = null;
+  if (item.lastDoneMileage != null && item.intervalMiles && v.currentMileage != null) {
+    const dueMileage = item.lastDoneMileage + item.intervalMiles;
+    milesUntil = dueMileage - v.currentMileage;
+  }
+  if (daysUntil === null && milesUntil === null) return { level: 'unknown', color: 'var(--text-muted)', label: 'Set an interval to track this' };
+  const overdue = (daysUntil !== null && daysUntil < 0) || (milesUntil !== null && milesUntil < 0);
+  const soon = !overdue && ((daysUntil !== null && daysUntil <= MAINTENANCE_WARNING_DAYS) || (milesUntil !== null && milesUntil <= MAINTENANCE_WARNING_MILES));
+  const parts = [];
+  if (daysUntil !== null) parts.push(daysUntil < 0 ? `${-daysUntil} day${-daysUntil === 1 ? '' : 's'} overdue` : `due in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`);
+  if (milesUntil !== null) parts.push(milesUntil < 0 ? `${-milesUntil} mi overdue` : `due in ${milesUntil} mi`);
+  const label = parts.join(' · ');
+  if (overdue) return { level: 'overdue', color: 'var(--critical)', label };
+  if (soon) return { level: 'soon', color: 'var(--warning)', label };
+  return { level: 'ok', color: 'var(--good)', label };
+}
+function maintenanceAlertCount(v) {
+  return v.maintenance.filter(item => ['overdue', 'soon'].includes(maintenanceStatus(v, item).level)).length;
 }
 
 // --- Restoration checklist ---
@@ -460,13 +503,14 @@ function renderList() {
     const remaining = remainingBudget(v);
     const pctUsed = budget > 0 ? Math.min(100, Math.max(0, (spent / budget) * 100)) : 0;
     const status = budgetStatus(remaining, budget);
+    const alertCount = maintenanceAlertCount(v);
 
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
       ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
       <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span></div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}</div>
       <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
       <div class="meter-row">
         <span class="meter-remaining">${money(remaining)}</span>
@@ -499,7 +543,7 @@ function renderDetail(vehicleId) {
     ${v.coverPhoto ? `<img class="lazy-photo detail-cover" data-photo-path="${v.coverPhoto}">` : ''}
     <div>
       <h2>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h2>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span></div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${maintenanceAlertCount(v) > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${maintenanceAlertCount(v)} due</span>` : ''}</div>
       <div class="vin">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
     </div>
   `;
@@ -1105,8 +1149,170 @@ function openChecklistItemModal(v, presetCategory) {
   });
 }
 
+function renderMaintenanceSection(v) {
+  const section = document.createElement('div');
+  section.className = 'section';
+  const secHeader = document.createElement('div');
+  secHeader.className = 'section-header';
+  const alertCount = maintenanceAlertCount(v);
+  secHeader.innerHTML = `<h3>Maintenance schedule</h3><span class="section-sub">${alertCount > 0 ? `⚠ ${alertCount} item${alertCount === 1 ? '' : 's'} due soon or overdue` : 'Track recurring service by date and/or mileage'}</span>`;
+  const btnGroup = document.createElement('div');
+  btnGroup.className = 'actions';
+  const mileageBtn = document.createElement('button');
+  mileageBtn.textContent = v.currentMileage != null ? `${v.currentMileage.toLocaleString()} mi — update` : 'Set current mileage';
+  mileageBtn.addEventListener('click', () => openMileageModal(v));
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add item';
+  addBtn.addEventListener('click', () => openMaintenanceModal(v));
+  btnGroup.appendChild(mileageBtn);
+  btnGroup.appendChild(addBtn);
+  secHeader.appendChild(btnGroup);
+  section.appendChild(secHeader);
+
+  if (v.maintenance.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No maintenance items yet. Add things like oil changes, tire rotations, or filter swaps to get due reminders.';
+    section.appendChild(empty);
+    return section;
+  }
+
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Task</th><th>Interval</th><th>Last done</th><th>Status</th><th></th></tr></thead><tbody></tbody>';
+  const tbody = table.querySelector('tbody');
+  v.maintenance.forEach(item => {
+    const st = maintenanceStatus(v, item);
+    const intervalParts = [];
+    if (item.intervalDays) intervalParts.push(`${item.intervalDays}d`);
+    if (item.intervalMiles) intervalParts.push(`${item.intervalMiles.toLocaleString()} mi`);
+    const lastParts = [];
+    if (item.lastDoneDate) lastParts.push(formatDate(item.lastDoneDate));
+    if (item.lastDoneMileage != null) lastParts.push(`${item.lastDoneMileage.toLocaleString()} mi`);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(item.task)}</td>
+      <td>${intervalParts.join(' / ') || '—'}</td>
+      <td>${lastParts.join(' / ') || 'Never'}</td>
+      <td><span class="chip" style="color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span></td>
+      <td class="row-actions"></td>
+    `;
+    const cell = tr.querySelector('.row-actions');
+    const doneBtn = document.createElement('button');
+    doneBtn.className = 'small primary';
+    doneBtn.textContent = 'Mark done today';
+    doneBtn.addEventListener('click', () => markMaintenanceDone(v, item));
+    const editBtn = document.createElement('button');
+    editBtn.className = 'small';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openMaintenanceModal(v, item));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'small danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => deleteMaintenanceItem(v, item));
+    cell.appendChild(doneBtn);
+    cell.appendChild(editBtn);
+    cell.appendChild(delBtn);
+    tbody.appendChild(tr);
+  });
+  section.appendChild(table);
+  return section;
+}
+
+async function markMaintenanceDone(v, item) {
+  const fields = { last_done_date: new Date().toISOString().slice(0, 10), last_done_mileage: v.currentMileage != null ? v.currentMileage : item.lastDoneMileage };
+  const { error } = await supabase.from('maintenance_items').update(fields).eq('id', item.id);
+  if (error) { alert('Could not save: ' + error.message); return; }
+  item.lastDoneDate = fields.last_done_date;
+  item.lastDoneMileage = fields.last_done_mileage;
+  render();
+}
+async function deleteMaintenanceItem(v, item) {
+  if (!confirm(`Delete "${item.task}" from the maintenance schedule?`)) return;
+  const { error } = await supabase.from('maintenance_items').delete().eq('id', item.id);
+  if (error) { alert('Could not delete: ' + error.message); return; }
+  v.maintenance = v.maintenance.filter(x => x.id !== item.id);
+  render();
+}
+
+function openMileageModal(v) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <h2>Update current mileage</h2>
+    <div class="field"><label>Mileage</label><input type="number" id="mi-mileage" value="${v.currentMileage != null ? v.currentMileage : ''}" placeholder="87500"></div>
+    <div class="modal-actions">
+      <button id="mi-cancel">Cancel</button>
+      <button class="primary" id="mi-save">Save</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#mi-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#mi-save').addEventListener('click', async () => {
+    const mileage = parseInt(modal.querySelector('#mi-mileage').value, 10);
+    if (isNaN(mileage) || mileage < 0) { alert('Enter a valid mileage.'); return; }
+    const { error } = await supabase.from('vehicles').update({ current_mileage: mileage }).eq('id', v.id);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    v.currentMileage = mileage;
+    backdrop.remove();
+    render();
+  });
+}
+
+function openMaintenanceModal(v, existing) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  const isEdit = !!existing;
+  modal.innerHTML = `
+    <h2>${isEdit ? 'Edit maintenance item' : 'Add maintenance item'}</h2>
+    <div class="field"><label>Task</label><input type="text" id="mx-task" value="${isEdit ? escapeHtml(existing.task) : ''}" placeholder="Oil change"></div>
+    <div class="field-row">
+      <div class="field"><label>Repeat every (days)</label><input type="number" id="mx-interval-days" value="${isEdit ? existing.intervalDays || '' : ''}" placeholder="180"></div>
+      <div class="field"><label>Repeat every (miles)</label><input type="number" id="mx-interval-miles" value="${isEdit ? existing.intervalMiles || '' : ''}" placeholder="5000"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Last done date</label><input type="date" id="mx-last-date" value="${isEdit ? existing.lastDoneDate || '' : ''}"></div>
+      <div class="field"><label>Last done mileage</label><input type="number" id="mx-last-mileage" value="${isEdit && existing.lastDoneMileage != null ? existing.lastDoneMileage : ''}" placeholder="82500"></div>
+    </div>
+    <div class="field"><label>Notes</label><input type="text" id="mx-notes" value="${isEdit ? escapeHtml(existing.notes || '') : ''}"></div>
+    <div class="modal-actions">
+      <button id="mx-cancel">Cancel</button>
+      <button class="primary" id="mx-save">${isEdit ? 'Save changes' : 'Add item'}</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#mx-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#mx-save').addEventListener('click', async () => {
+    const task = modal.querySelector('#mx-task').value.trim();
+    if (!task) { alert('Task name is required.'); return; }
+    const intervalDaysVal = parseInt(modal.querySelector('#mx-interval-days').value, 10);
+    const intervalMilesVal = parseInt(modal.querySelector('#mx-interval-miles').value, 10);
+    const lastMileageVal = parseInt(modal.querySelector('#mx-last-mileage').value, 10);
+    const fields = {
+      task,
+      interval_days: isNaN(intervalDaysVal) ? null : intervalDaysVal,
+      interval_miles: isNaN(intervalMilesVal) ? null : intervalMilesVal,
+      last_done_date: modal.querySelector('#mx-last-date').value || null,
+      last_done_mileage: isNaN(lastMileageVal) ? null : lastMileageVal,
+      notes: modal.querySelector('#mx-notes').value.trim(),
+    };
+    if (!fields.interval_days && !fields.interval_miles) { alert('Set at least one of: repeat every N days, repeat every N miles.'); return; }
+    if (isEdit) {
+      const { error } = await supabase.from('maintenance_items').update(fields).eq('id', existing.id);
+      if (error) { alert('Could not save: ' + error.message); return; }
+      Object.assign(existing, { task, intervalDays: fields.interval_days, intervalMiles: fields.interval_miles, lastDoneDate: fields.last_done_date, lastDoneMileage: fields.last_done_mileage, notes: fields.notes });
+    } else {
+      const { data: row, error } = await supabase.from('maintenance_items').insert({ vehicle_id: v.id, ...fields }).select().single();
+      if (error) { alert('Could not add item: ' + error.message); return; }
+      v.maintenance.push(dbMaintenanceToLocal(row));
+    }
+    backdrop.remove();
+    render();
+  });
+}
+
 function renderJournalTab(v) {
   const wrap = document.createElement('div');
+  wrap.appendChild(renderMaintenanceSection(v));
   wrap.appendChild(renderChecklistSection(v));
 
   const header = document.createElement('div');
