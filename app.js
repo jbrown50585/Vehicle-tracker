@@ -113,6 +113,7 @@ function dbVehicleToLocal(row) {
   return {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
+    vehicleType: row.vehicle_type || 'project',
     phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [],
   };
 }
@@ -465,8 +466,8 @@ function renderList() {
     card.innerHTML = `
       ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
       <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'}</div>
-      <div class="timeframe">${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}</div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span></div>
+      <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
       <div class="meter-row">
         <span class="meter-remaining">${money(remaining)}</span>
         <span class="meter-total">remaining of ${money(budget)}</span>
@@ -498,8 +499,8 @@ function renderDetail(vehicleId) {
     ${v.coverPhoto ? `<img class="lazy-photo detail-cover" data-photo-path="${v.coverPhoto}">` : ''}
     <div>
       <h2>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h2>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'}</div>
-      <div class="vin">${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}</div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span></div>
+      <div class="vin">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
     </div>
   `;
   const headerBtns = document.createElement('div');
@@ -1209,8 +1210,17 @@ function openVehicleModal(existing) {
   const modal = document.createElement('div');
   modal.className = 'modal';
   const isEdit = !!existing;
+  const vehicleType = isEdit ? (existing.vehicleType || 'project') : 'project';
   modal.innerHTML = `
-    <h2>${isEdit ? 'Edit vehicle project' : 'New vehicle project'}</h2>
+    <h2>${isEdit ? 'Edit vehicle' : 'New vehicle'}</h2>
+    <div class="field">
+      <label>Type</label>
+      <div class="field-row">
+        <label class="checkbox-field" style="flex:1"><input type="radio" name="f-type" id="f-type-project" value="project" ${vehicleType === 'project' ? 'checked' : ''}> Restoration project</label>
+        <label class="checkbox-field" style="flex:1"><input type="radio" name="f-type" id="f-type-maintenance" value="maintenance" ${vehicleType === 'maintenance' ? 'checked' : ''}> General maintenance</label>
+      </div>
+      <div class="section-sub">A project seeds a restoration checklist and tracks a target finish date. Maintenance is ongoing — no checklist template, no target date.</div>
+    </div>
     <div class="field-row">
       <div class="field"><label>Year</label><select id="f-year">${yearOptionsHtml(isEdit ? existing.year : null)}</select></div>
       <div class="field" style="flex:2">
@@ -1232,7 +1242,7 @@ function openVehicleModal(existing) {
     <div id="f-photo-preview"></div>
     <div class="field-row">
       <div class="field"><label>Start date</label><input type="date" id="f-start" value="${isEdit ? existing.startDate || '' : ''}"></div>
-      <div class="field"><label>Target finish date</label><input type="date" id="f-target" value="${isEdit ? existing.targetDate || '' : ''}"></div>
+      <div class="field" id="f-target-field" style="${vehicleType === 'maintenance' ? 'display:none' : ''}"><label>Target finish date</label><input type="date" id="f-target" value="${isEdit ? existing.targetDate || '' : ''}"></div>
     </div>
     ${isEdit ? '' : `<div class="field"><label>Starting budget ($)</label><input type="number" step="0.01" id="f-budget" placeholder="5000"></div><div class="section-sub">You can split this into more phases later from the Budget tab.</div>`}
     <div class="modal-actions">
@@ -1241,6 +1251,13 @@ function openVehicleModal(existing) {
     </div>
   `;
   const backdrop = openModalBackdrop(modal);
+
+  const targetField = modal.querySelector('#f-target-field');
+  modal.querySelectorAll('input[name="f-type"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      targetField.style.display = modal.querySelector('input[name="f-type"]:checked').value === 'maintenance' ? 'none' : '';
+    });
+  });
 
   const makeSelect = modal.querySelector('#f-make-select');
   const makeOther = modal.querySelector('#f-make-other');
@@ -1342,12 +1359,14 @@ function openVehicleModal(existing) {
     if (!year || !make || !model) { alert('Year, make, and model are required.'); return; }
     const saveBtn = modal.querySelector('#f-save');
     saveBtn.disabled = true;
+    const selectedType = modal.querySelector('input[name="f-type"]:checked').value;
     const fields = {
       year: parseInt(year, 10), make, model,
       trim: modal.querySelector('#f-trim').value.trim(),
       vin: modal.querySelector('#f-vin').value.trim(),
       start_date: modal.querySelector('#f-start').value || null,
-      target_date: modal.querySelector('#f-target').value || null,
+      target_date: selectedType === 'maintenance' ? null : (modal.querySelector('#f-target').value || null),
+      vehicle_type: selectedType,
     };
     if (isEdit) {
       let finalCoverPath = photoState.path;
@@ -1362,7 +1381,7 @@ function openVehicleModal(existing) {
       fields.cover_photo_path = finalCoverPath;
       const { error } = await supabase.from('vehicles').update(fields).eq('id', existing.id);
       if (error) { alert('Could not save: ' + error.message); saveBtn.disabled = false; return; }
-      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, coverPhoto: finalCoverPath });
+      Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath });
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
       const { data: vRow, error } = await supabase.from('vehicles').insert(fields).select().single();
@@ -1377,7 +1396,7 @@ function openVehicleModal(existing) {
       const localVehicle = dbVehicleToLocal(vRow);
       localVehicle.coverPhoto = coverPath;
       localVehicle.phases = [dbPhaseToLocal(phRow)];
-      localVehicle.checklist = await seedChecklist(vRow.id);
+      localVehicle.checklist = selectedType === 'maintenance' ? [] : await seedChecklist(vRow.id);
       data.vehicles.push(localVehicle);
     }
     backdrop.remove();

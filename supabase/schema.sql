@@ -15,9 +15,11 @@ create table if not exists vehicles (
   start_date date,
   target_date date,
   cover_photo_path text,
+  vehicle_type text not null default 'project',
   created_at timestamptz not null default now()
 );
 alter table vehicles add column if not exists cover_photo_path text;
+alter table vehicles add column if not exists vehicle_type text not null default 'project';
 
 create table if not exists phases (
   id uuid primary key default gen_random_uuid(),
