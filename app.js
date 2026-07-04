@@ -52,6 +52,47 @@ let authInfo = '';
 let data = { vehicles: [] };
 let currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
 
+// --- URL routing ---
+// /                              -> vehicle list
+// /vehicle/:id                   -> vehicle detail, Budget tab
+// /vehicle/:id/parts             -> Parts tab
+// /vehicle/:id/buildlog          -> Build log tab
+
+const TAB_TO_SEGMENT = { budget: 'budget', parts: 'parts', journal: 'buildlog' };
+const SEGMENT_TO_TAB = { budget: 'budget', parts: 'parts', buildlog: 'journal' };
+
+function parseRoute() {
+  const segments = window.location.pathname.split('/').filter(Boolean);
+  if (segments[0] === 'vehicle' && segments[1]) {
+    const tab = SEGMENT_TO_TAB[segments[2]] || 'budget';
+    return { screen: 'detail', vehicleId: segments[1], tab };
+  }
+  return { screen: 'list', vehicleId: null, tab: 'budget' };
+}
+function routeToPath(view) {
+  if (view.screen === 'detail' && view.vehicleId) {
+    return `/vehicle/${view.vehicleId}/${TAB_TO_SEGMENT[view.tab] || 'budget'}`;
+  }
+  return '/';
+}
+function navigate(view, options = {}) {
+  currentView = view;
+  const path = routeToPath(view);
+  if (options.replace) {
+    history.replaceState(null, '', path);
+  } else if (window.location.pathname !== path) {
+    history.pushState(null, '', path);
+  }
+  render();
+}
+window.addEventListener('popstate', () => {
+  const route = parseRoute();
+  currentView = (route.screen === 'detail' && !data.vehicles.some(v => v.id === route.vehicleId))
+    ? { screen: 'list', vehicleId: null, tab: 'budget' }
+    : route;
+  render();
+});
+
 function money(n) {
   return '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -428,7 +469,7 @@ function renderList() {
       <div class="meter-track"><div class="meter-fill" style="width:${pctUsed}%; background:${status.color}"></div></div>
       <div class="status-label"><span class="status-dot" style="background:${status.color}"></span>${status.label} &middot; ${v.parts.length} part${v.parts.length === 1 ? '' : 's'}</div>
     `;
-    card.addEventListener('click', () => { currentView = { screen: 'detail', vehicleId: v.id, tab: 'budget' }; render(); });
+    card.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: 'budget' }));
     grid.appendChild(card);
   });
   wrap.appendChild(grid);
@@ -443,7 +484,7 @@ function renderDetail(vehicleId) {
   const back = document.createElement('a');
   back.className = 'back-link';
   back.textContent = '← All vehicle projects';
-  back.addEventListener('click', () => { currentView = { screen: 'list', vehicleId: null, tab: 'budget' }; render(); });
+  back.addEventListener('click', () => navigate({ screen: 'list', vehicleId: null, tab: 'budget' }));
   wrap.appendChild(back);
 
   const header = document.createElement('div');
@@ -476,7 +517,7 @@ function renderDetail(vehicleId) {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (currentView.tab === key ? ' active' : '');
     btn.textContent = label;
-    btn.addEventListener('click', () => { currentView.tab = key; render(); });
+    btn.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: key }));
     tabs.appendChild(btn);
   });
   wrap.appendChild(tabs);
@@ -495,8 +536,7 @@ async function deleteVehicle(v) {
   const { error } = await supabase.from('vehicles').delete().eq('id', v.id);
   if (error) { alert('Could not delete: ' + error.message); return; }
   data.vehicles = data.vehicles.filter(x => x.id !== v.id);
-  currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
-  render();
+  navigate({ screen: 'list', vehicleId: null, tab: 'budget' });
 }
 
 // --- Budget tab ---
@@ -1537,15 +1577,24 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 
 // --- Boot ---
 
-async function applySession(session) {
+async function applySession(session, options = {}) {
   currentUser = session?.user || null;
   authReady = true;
   if (currentUser) {
     await loadAllData();
+    const route = options.restoreRoute ? parseRoute() : { screen: 'list', vehicleId: null, tab: 'budget' };
+    if (route.screen === 'detail' && !data.vehicles.some(v => v.id === route.vehicleId)) {
+      currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
+      history.replaceState(null, '', '/');
+    } else {
+      currentView = route;
+      if (!options.restoreRoute) history.replaceState(null, '', '/');
+    }
   } else {
     data = { vehicles: [] };
+    currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
+    history.replaceState(null, '', '/');
   }
-  currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
   render();
 }
 
@@ -1563,7 +1612,7 @@ async function boot() {
     render();
     return;
   }
-  await applySession(result);
+  await applySession(result, { restoreRoute: true });
 }
 
 supabase.auth.onAuthStateChange((event, session) => {
