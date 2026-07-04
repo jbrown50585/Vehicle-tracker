@@ -762,10 +762,6 @@ function renderPartsTab(v) {
         const photoImg = tr.querySelector('[data-photo-click]');
         if (photoImg) photoImg.addEventListener('click', () => openLightboxForPath(p.photo));
         const cell = tr.querySelector('.row-actions');
-        const ebayBtn = document.createElement('button');
-        ebayBtn.className = 'small';
-        ebayBtn.textContent = 'eBay';
-        ebayBtn.addEventListener('click', () => openEbayModal(v, p));
         const raBtn = document.createElement('button');
         raBtn.className = 'small';
         raBtn.textContent = 'RockAuto';
@@ -774,7 +770,6 @@ function renderPartsTab(v) {
         amzBtn.className = 'small';
         amzBtn.textContent = 'Amazon';
         amzBtn.addEventListener('click', () => window.open(amazonSearchUrl(v, p), '_blank', 'noopener'));
-        cell.appendChild(ebayBtn);
         cell.appendChild(raBtn);
         cell.appendChild(amzBtn);
         const editBtn = document.createElement('button');
@@ -1260,7 +1255,6 @@ function openPartModal(v, existing, presetCategory) {
     <div class="field"><label>Photo (receipt or part)</label><input type="file" id="p-photo" accept="image/*"></div>
     <div id="p-photo-preview"></div>
     <div class="field-row">
-      <button type="button" id="p-search-ebay" class="small">Search eBay</button>
       <button type="button" id="p-search-rockauto" class="small">Search RockAuto</button>
       <button type="button" id="p-search-amazon" class="small">Search Amazon</button>
     </div>
@@ -1278,7 +1272,6 @@ function openPartModal(v, existing, presetCategory) {
       partNumber: modal.querySelector('#p-partnum').value.trim(),
     };
   }
-  modal.querySelector('#p-search-ebay').addEventListener('click', () => openEbayModal(v, currentDraftPart()));
   modal.querySelector('#p-search-rockauto').addEventListener('click', () => window.open(rockAutoSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
   modal.querySelector('#p-search-amazon').addEventListener('click', () => window.open(amazonSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
 
