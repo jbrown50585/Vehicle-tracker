@@ -72,7 +72,7 @@ function dbVehicleToLocal(row) {
   return {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
-    phases: [], parts: [], labor: [], credits: [], journal: [],
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -87,15 +87,19 @@ function dbLaborToLocal(row) {
 }
 function dbCreditToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, date: row.date, amount: Number(row.amount), reason: row.reason }; }
 function dbJournalToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, date: row.date, text: row.text, photos: row.photo_paths || [] }; }
+function dbChecklistToLocal(row) {
+  return { id: row.id, vehicleId: row.vehicle_id, category: row.category, task: row.task, done: row.done, doneDate: row.done_date, position: row.position };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
     supabase.from('labor').select('*'),
     supabase.from('credits').select('*'),
     supabase.from('journal_entries').select('*'),
+    supabase.from('checklist_items').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -104,8 +108,81 @@ async function loadAllData() {
     v.labor = (laborRes.data || []).filter(r => r.vehicle_id === v.id).map(dbLaborToLocal);
     v.credits = (creditsRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCreditToLocal);
     v.journal = (journalRes.data || []).filter(r => r.vehicle_id === v.id).map(dbJournalToLocal);
+    v.checklist = (checklistRes.data || []).filter(r => r.vehicle_id === v.id).map(dbChecklistToLocal);
   });
   data = { vehicles };
+}
+
+// --- Restoration checklist ---
+
+const CHECKLIST_TEMPLATE = {
+  'Engine': [
+    'Compression / leak-down test',
+    'Remove engine',
+    'Disassemble & inspect',
+    'Machine shop work (bore/hone/resurface)',
+    'Rebuild with new gaskets & seals',
+    'Reinstall engine',
+    'Break-in & tune',
+  ],
+  'Transmission/Drivetrain': [
+    'Inspect transmission & clutch/torque converter',
+    'Rebuild or replace transmission',
+    'Inspect driveshaft & U-joints',
+    'Rebuild differential',
+    'Reinstall drivetrain',
+  ],
+  'Brakes': [
+    'Inspect lines & hoses',
+    'Replace master/wheel cylinders or calipers',
+    'Replace pads/shoes & rotors/drums',
+    'Bleed brake system',
+    'Test & adjust',
+  ],
+  'Suspension/Steering': [
+    'Inspect bushings & ball joints',
+    'Replace shocks/struts & springs',
+    'Rebuild steering box/rack',
+    'Align front end',
+  ],
+  'Body & Paint': [
+    'Strip old paint/rust',
+    'Repair metal & replace rusted panels',
+    'Bodywork & filler',
+    'Prime',
+    'Paint & clear coat',
+    'Wet sand & buff',
+  ],
+  'Interior': [
+    'Remove & inspect interior',
+    'Repair/replace upholstery & carpet',
+    'Restore dash & gauges',
+    'Rewire interior electronics',
+    'Reinstall interior',
+  ],
+  'Electrical': [
+    'Inspect wiring harness',
+    'Replace/repair wiring',
+    'Restore lighting',
+    'Test charging & starting system',
+  ],
+  'Trim/Exterior': [
+    'Restore/replace chrome & trim',
+    'Replace weatherstripping & seals',
+    'Restore glass & mirrors',
+    'Reinstall exterior trim',
+  ],
+};
+
+async function seedChecklist(vehicleId) {
+  const rows = [];
+  let position = 0;
+  Object.entries(CHECKLIST_TEMPLATE).forEach(([category, tasks]) => {
+    tasks.forEach(task => { rows.push({ vehicle_id: vehicleId, category, task, position: position++ }); });
+  });
+  const { data: inserted, error } = await supabase.from('checklist_items').insert(rows).select();
+  if (error) { alert('Could not load standard checklist: ' + error.message); return []; }
+  return (inserted || []).map(dbChecklistToLocal);
 }
 
 // --- Budget math ---
@@ -668,8 +745,123 @@ async function deletePart(v, p) {
 
 // --- Journal tab ---
 
+function renderChecklistSection(v) {
+  const section = document.createElement('div');
+  section.className = 'section';
+  const done = v.checklist.filter(c => c.done).length;
+  const total = v.checklist.length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const secHeader = document.createElement('div');
+  secHeader.className = 'section-header';
+  secHeader.innerHTML = `<h3>Restoration checklist</h3><span class="section-sub">${total > 0 ? `${done} of ${total} tasks done (${pct}%)` : 'Break the restore down into steps you can check off'}</span>`;
+  const btnGroup = document.createElement('div');
+  btnGroup.className = 'actions';
+  if (total === 0) {
+    const loadBtn = document.createElement('button');
+    loadBtn.className = 'primary';
+    loadBtn.textContent = 'Load standard checklist';
+    loadBtn.addEventListener('click', async () => {
+      loadBtn.disabled = true;
+      v.checklist = await seedChecklist(v.id);
+      render();
+    });
+    btnGroup.appendChild(loadBtn);
+  }
+  const addTaskBtn = document.createElement('button');
+  addTaskBtn.textContent = '+ Add task';
+  addTaskBtn.addEventListener('click', () => openChecklistItemModal(v));
+  btnGroup.appendChild(addTaskBtn);
+  secHeader.appendChild(btnGroup);
+  section.appendChild(secHeader);
+
+  if (total > 0) {
+    section.appendChild((() => {
+      const track = document.createElement('div');
+      track.className = 'meter-track';
+      track.style.marginBottom = '16px';
+      track.innerHTML = `<div class="meter-fill" style="width:${pct}%; background:var(--good)"></div>`;
+      return track;
+    })());
+
+    CATEGORIES.forEach(category => {
+      const items = v.checklist.filter(c => c.category === category).sort((a, b) => a.position - b.position);
+      if (items.length === 0) return;
+      const catBlock = document.createElement('div');
+      catBlock.style.marginBottom = '16px';
+      catBlock.innerHTML = `<div class="section-sub" style="margin-bottom:6px; font-weight:600; color:var(--text-secondary)">${escapeHtml(category)}</div>`;
+      items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'checklist-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = item.done;
+        cb.addEventListener('change', () => toggleChecklistDone(v, item, cb.checked));
+        const label = document.createElement('span');
+        label.className = 'task-text' + (item.done ? ' done-task' : '');
+        label.textContent = item.task + (item.done && item.doneDate ? ` (${formatDate(item.doneDate)})` : '');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'small danger';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => deleteChecklistItem(v, item));
+        row.appendChild(cb);
+        row.appendChild(label);
+        row.appendChild(delBtn);
+        catBlock.appendChild(row);
+      });
+      section.appendChild(catBlock);
+    });
+  }
+  return section;
+}
+
+async function toggleChecklistDone(v, item, checked) {
+  const doneDate = checked ? new Date().toISOString().slice(0, 10) : null;
+  const { error } = await supabase.from('checklist_items').update({ done: checked, done_date: doneDate }).eq('id', item.id);
+  if (error) { alert('Could not save: ' + error.message); return; }
+  item.done = checked;
+  item.doneDate = doneDate;
+  render();
+}
+async function deleteChecklistItem(v, item) {
+  if (!confirm(`Delete task "${item.task}"?`)) return;
+  const { error } = await supabase.from('checklist_items').delete().eq('id', item.id);
+  if (error) { alert('Could not delete: ' + error.message); return; }
+  v.checklist = v.checklist.filter(x => x.id !== item.id);
+  render();
+}
+
+function openChecklistItemModal(v, presetCategory) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <h2>Add restoration task</h2>
+    <div class="field"><label>Category</label><select id="chk-category">${CATEGORIES.map(c => `<option value="${c}" ${presetCategory === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div class="field"><label>Task</label><input type="text" id="chk-task" placeholder="Rebuild carburetor"></div>
+    <div class="modal-actions">
+      <button id="chk-cancel">Cancel</button>
+      <button class="primary" id="chk-save">Add task</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#chk-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#chk-save').addEventListener('click', async () => {
+    const category = modal.querySelector('#chk-category').value;
+    const task = modal.querySelector('#chk-task').value.trim();
+    if (!task) { alert('Enter a task.'); return; }
+    const position = Math.max(-1, ...v.checklist.filter(c => c.category === category).map(c => c.position)) + 1;
+    const { data: row, error } = await supabase.from('checklist_items').insert({ vehicle_id: v.id, category, task, position }).select().single();
+    if (error) { alert('Could not add task: ' + error.message); return; }
+    v.checklist.push(dbChecklistToLocal(row));
+    backdrop.remove();
+    render();
+  });
+}
+
 function renderJournalTab(v) {
   const wrap = document.createElement('div');
+  wrap.appendChild(renderChecklistSection(v));
+
   const header = document.createElement('div');
   header.className = 'section-header';
   header.innerHTML = `<h3>Build log</h3><span class="section-sub">A dated record of what you did, with photos</span>`;
@@ -939,6 +1131,7 @@ function openVehicleModal(existing) {
       const localVehicle = dbVehicleToLocal(vRow);
       localVehicle.coverPhoto = coverPath;
       localVehicle.phases = [dbPhaseToLocal(phRow)];
+      localVehicle.checklist = await seedChecklist(vRow.id);
       data.vehicles.push(localVehicle);
     }
     backdrop.remove();

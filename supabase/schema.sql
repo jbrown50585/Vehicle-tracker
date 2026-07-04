@@ -67,6 +67,17 @@ create table if not exists journal_entries (
   created_at timestamptz not null default now()
 );
 
+create table if not exists checklist_items (
+  id uuid primary key default gen_random_uuid(),
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  category text not null default 'Other',
+  task text not null,
+  done boolean not null default false,
+  done_date date,
+  position int not null default 0,
+  created_at timestamptz not null default now()
+);
+
 -- Row Level Security: every user can only ever see/touch their own rows.
 
 alter table vehicles enable row level security;
@@ -75,6 +86,7 @@ alter table parts enable row level security;
 alter table labor enable row level security;
 alter table credits enable row level security;
 alter table journal_entries enable row level security;
+alter table checklist_items enable row level security;
 
 drop policy if exists "own vehicles select" on vehicles;
 drop policy if exists "own vehicles insert" on vehicles;
@@ -129,6 +141,15 @@ create policy "own journal select" on journal_entries for select using (vehicle_
 create policy "own journal insert" on journal_entries for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own journal update" on journal_entries for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own journal delete" on journal_entries for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+
+drop policy if exists "own checklist select" on checklist_items;
+drop policy if exists "own checklist insert" on checklist_items;
+drop policy if exists "own checklist update" on checklist_items;
+drop policy if exists "own checklist delete" on checklist_items;
+create policy "own checklist select" on checklist_items for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own checklist insert" on checklist_items for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own checklist update" on checklist_items for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own checklist delete" on checklist_items for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
 -- Storage bucket for part/journal photos. Private bucket; files are stored under
 -- a path starting with the owning user's id, and the policies below only allow
