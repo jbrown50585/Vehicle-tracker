@@ -80,7 +80,19 @@ function dbPartToLocal(row) {
   return {
     id: row.id, vehicleId: row.vehicle_id, phaseId: row.phase_id, name: row.name, category: row.category,
     cost: Number(row.cost), status: row.status, vendor: row.vendor, notes: row.notes, photo: row.photo_path,
+    partNumber: row.part_number,
   };
+}
+
+function partSearchQuery(v, p) {
+  return p.partNumber ? p.partNumber : `${v.year} ${v.make} ${v.model} ${p.name}`;
+}
+function amazonSearchUrl(v, p) {
+  return `https://www.amazon.com/s?k=${encodeURIComponent(partSearchQuery(v, p))}`;
+}
+function rockAutoSearchUrl(v, p) {
+  if (p.partNumber) return `https://www.rockauto.com/en/partsearch/?partnum=${encodeURIComponent(p.partNumber)}`;
+  return `https://www.google.com/search?q=${encodeURIComponent('site:rockauto.com ' + partSearchQuery(v, p))}`;
 }
 function dbLaborToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, date: row.date, description: row.description, hours: Number(row.hours), paid: row.paid, amount: Number(row.amount) };
@@ -696,7 +708,7 @@ function renderPartsTab(v) {
       section.appendChild(empty);
     } else {
       const table = document.createElement('table');
-      table.innerHTML = '<thead><tr><th>Part</th><th>Cost</th><th>Status</th><th>Phase</th><th>Vendor</th><th></th></tr></thead><tbody></tbody>';
+      table.innerHTML = '<thead><tr><th>Part</th><th>Part #</th><th>Cost</th><th>Status</th><th>Phase</th><th>Vendor</th><th></th></tr></thead><tbody></tbody>';
       const tbody = table.querySelector('tbody');
       items.forEach(p => {
         const st = statusInfo(p.status);
@@ -705,6 +717,7 @@ function renderPartsTab(v) {
         if (p.status === 'returned') tr.className = 'muted-row';
         tr.innerHTML = `
           <td>${p.photo ? `<img class="lazy-photo" data-photo-path="${p.photo}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:6px;cursor:pointer;background:var(--gridline)" data-photo-click>` : ''}${escapeHtml(p.name)}</td>
+          <td>${escapeHtml(p.partNumber || '')}</td>
           <td class="cost ${p.status === 'returned' ? 'strike' : ''}">${money(p.cost)}</td>
           <td><span class="chip" style="color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span></td>
           <td>${escapeHtml(phase ? phase.name : '')}</td>
@@ -714,6 +727,16 @@ function renderPartsTab(v) {
         const photoImg = tr.querySelector('[data-photo-click]');
         if (photoImg) photoImg.addEventListener('click', () => openLightboxForPath(p.photo));
         const cell = tr.querySelector('.row-actions');
+        const raBtn = document.createElement('button');
+        raBtn.className = 'small';
+        raBtn.textContent = 'RockAuto';
+        raBtn.addEventListener('click', () => window.open(rockAutoSearchUrl(v, p), '_blank', 'noopener'));
+        const amzBtn = document.createElement('button');
+        amzBtn.className = 'small';
+        amzBtn.textContent = 'Amazon';
+        amzBtn.addEventListener('click', () => window.open(amazonSearchUrl(v, p), '_blank', 'noopener'));
+        cell.appendChild(raBtn);
+        cell.appendChild(amzBtn);
         const editBtn = document.createElement('button');
         editBtn.className = 'small';
         editBtn.textContent = 'Edit';
@@ -1189,10 +1212,17 @@ function openPartModal(v, existing, presetCategory) {
       <div class="field"><label>Status</label><select id="p-status">${STATUSES.map(s => `<option value="${s.key}" ${isEdit && existing.status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
       <div class="field"><label>Budget phase</label><select id="p-phase">${v.phases.map(ph => `<option value="${ph.id}" ${isEdit && existing.phaseId === ph.id ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>Vendor</label><input type="text" id="p-vendor" value="${isEdit ? escapeHtml(existing.vendor || '') : ''}" placeholder="RockAuto, LMC Truck, junkyard..."></div>
-    <div class="field"><label>Notes (part number, tracking, etc.)</label><input type="text" id="p-notes" value="${isEdit ? escapeHtml(existing.notes || '') : ''}"></div>
+    <div class="field-row">
+      <div class="field"><label>Vendor</label><input type="text" id="p-vendor" value="${isEdit ? escapeHtml(existing.vendor || '') : ''}" placeholder="RockAuto, LMC Truck, junkyard..."></div>
+      <div class="field"><label>Part number / SKU</label><input type="text" id="p-partnum" value="${isEdit ? escapeHtml(existing.partNumber || '') : ''}" placeholder="e.g. D1234"></div>
+    </div>
+    <div class="field"><label>Notes (tracking, condition, etc.)</label><input type="text" id="p-notes" value="${isEdit ? escapeHtml(existing.notes || '') : ''}"></div>
     <div class="field"><label>Photo (receipt or part)</label><input type="file" id="p-photo" accept="image/*"></div>
     <div id="p-photo-preview"></div>
+    <div class="field-row">
+      <button type="button" id="p-search-rockauto" class="small">Search RockAuto</button>
+      <button type="button" id="p-search-amazon" class="small">Search Amazon</button>
+    </div>
     <div class="modal-actions">
       <button id="p-cancel">Cancel</button>
       <button class="primary" id="p-save">${isEdit ? 'Save changes' : 'Add part'}</button>
@@ -1200,6 +1230,15 @@ function openPartModal(v, existing, presetCategory) {
   `;
   const backdrop = openModalBackdrop(modal);
   const preview = modal.querySelector('#p-photo-preview');
+
+  function currentDraftPart() {
+    return {
+      name: modal.querySelector('#p-name').value.trim() || (isEdit ? existing.name : ''),
+      partNumber: modal.querySelector('#p-partnum').value.trim(),
+    };
+  }
+  modal.querySelector('#p-search-rockauto').addEventListener('click', () => window.open(rockAutoSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
+  modal.querySelector('#p-search-amazon').addEventListener('click', () => window.open(amazonSearchUrl(v, currentDraftPart()), '_blank', 'noopener'));
 
   function renderPreview() {
     preview.innerHTML = '';
@@ -1267,13 +1306,14 @@ function openPartModal(v, existing, presetCategory) {
       status: modal.querySelector('#p-status').value,
       phase_id: modal.querySelector('#p-phase').value,
       vendor: modal.querySelector('#p-vendor').value.trim(),
+      part_number: modal.querySelector('#p-partnum').value.trim(),
       notes: modal.querySelector('#p-notes').value.trim(),
       photo_path: finalPath,
     };
     if (isEdit) {
       const { error } = await supabase.from('parts').update(fields).eq('id', existing.id);
       if (error) { alert('Could not save: ' + error.message); saveBtn.disabled = false; return; }
-      Object.assign(existing, { name, category: fields.category, cost: fields.cost, status: fields.status, phaseId: fields.phase_id, vendor: fields.vendor, notes: fields.notes, photo: finalPath });
+      Object.assign(existing, { name, category: fields.category, cost: fields.cost, status: fields.status, phaseId: fields.phase_id, vendor: fields.vendor, partNumber: fields.part_number, notes: fields.notes, photo: finalPath });
     } else {
       const { data: row, error } = await supabase.from('parts').insert({ vehicle_id: v.id, ...fields }).select().single();
       if (error) { alert('Could not add part: ' + error.message); saveBtn.disabled = false; return; }

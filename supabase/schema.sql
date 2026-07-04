@@ -37,8 +37,10 @@ create table if not exists parts (
   vendor text,
   notes text,
   photo_path text,
+  part_number text,
   created_at timestamptz not null default now()
 );
+alter table parts add column if not exists part_number text;
 
 create table if not exists labor (
   id uuid primary key default gen_random_uuid(),
