@@ -1183,7 +1183,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 
 // --- Boot ---
 
-supabase.auth.onAuthStateChange(async (event, session) => {
+async function applySession(session) {
   currentUser = session?.user || null;
   authReady = true;
   if (currentUser) {
@@ -1193,8 +1193,31 @@ supabase.auth.onAuthStateChange(async (event, session) => {
   }
   currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
   render();
+}
+
+async function boot() {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 8000));
+  const sessionCheck = supabase.auth.getSession()
+    .then(({ data }) => data.session)
+    .catch((err) => { console.error('getSession failed:', err); return null; });
+
+  const result = await Promise.race([sessionCheck, timeout]);
+  if (result === 'timeout') {
+    console.error('Timed out waiting for Supabase auth to respond.');
+    authReady = true;
+    authError = 'Could not reach the login service. Check your connection and reload the page.';
+    render();
+    return;
+  }
+  await applySession(result);
+}
+
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'INITIAL_SESSION') return;
+  applySession(session);
 });
 
+boot();
 render();
 
 if ('serviceWorker' in navigator) {

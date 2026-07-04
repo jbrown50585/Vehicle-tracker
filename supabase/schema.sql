@@ -1,9 +1,10 @@
 -- Vehicle Project Tracker — Supabase schema
--- Run this once in the Supabase dashboard: SQL Editor -> New query -> paste all -> Run
+-- Run this in the Supabase dashboard: SQL Editor -> New query -> paste all -> Run
+-- Safe to run more than once (uses IF NOT EXISTS / DROP ... IF EXISTS everywhere).
 
 create extension if not exists "pgcrypto";
 
-create table vehicles (
+create table if not exists vehicles (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
   vin text,
@@ -16,14 +17,14 @@ create table vehicles (
   created_at timestamptz not null default now()
 );
 
-create table phases (
+create table if not exists phases (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   name text not null,
   budget numeric not null default 0
 );
 
-create table parts (
+create table if not exists parts (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   phase_id uuid references phases(id) on delete set null,
@@ -37,7 +38,7 @@ create table parts (
   created_at timestamptz not null default now()
 );
 
-create table labor (
+create table if not exists labor (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   date date,
@@ -47,7 +48,7 @@ create table labor (
   amount numeric not null default 0
 );
 
-create table credits (
+create table if not exists credits (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   date date,
@@ -55,7 +56,7 @@ create table credits (
   reason text
 );
 
-create table journal_entries (
+create table if not exists journal_entries (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   date date,
@@ -73,31 +74,55 @@ alter table labor enable row level security;
 alter table credits enable row level security;
 alter table journal_entries enable row level security;
 
+drop policy if exists "own vehicles select" on vehicles;
+drop policy if exists "own vehicles insert" on vehicles;
+drop policy if exists "own vehicles update" on vehicles;
+drop policy if exists "own vehicles delete" on vehicles;
 create policy "own vehicles select" on vehicles for select using (user_id = auth.uid());
 create policy "own vehicles insert" on vehicles for insert with check (user_id = auth.uid());
 create policy "own vehicles update" on vehicles for update using (user_id = auth.uid());
 create policy "own vehicles delete" on vehicles for delete using (user_id = auth.uid());
 
+drop policy if exists "own phases select" on phases;
+drop policy if exists "own phases insert" on phases;
+drop policy if exists "own phases update" on phases;
+drop policy if exists "own phases delete" on phases;
 create policy "own phases select" on phases for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own phases insert" on phases for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own phases update" on phases for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own phases delete" on phases for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
+drop policy if exists "own parts select" on parts;
+drop policy if exists "own parts insert" on parts;
+drop policy if exists "own parts update" on parts;
+drop policy if exists "own parts delete" on parts;
 create policy "own parts select" on parts for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own parts insert" on parts for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own parts update" on parts for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own parts delete" on parts for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
+drop policy if exists "own labor select" on labor;
+drop policy if exists "own labor insert" on labor;
+drop policy if exists "own labor update" on labor;
+drop policy if exists "own labor delete" on labor;
 create policy "own labor select" on labor for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own labor insert" on labor for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own labor update" on labor for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own labor delete" on labor for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
+drop policy if exists "own credits select" on credits;
+drop policy if exists "own credits insert" on credits;
+drop policy if exists "own credits update" on credits;
+drop policy if exists "own credits delete" on credits;
 create policy "own credits select" on credits for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own credits insert" on credits for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own credits update" on credits for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own credits delete" on credits for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
+drop policy if exists "own journal select" on journal_entries;
+drop policy if exists "own journal insert" on journal_entries;
+drop policy if exists "own journal update" on journal_entries;
+drop policy if exists "own journal delete" on journal_entries;
 create policy "own journal select" on journal_entries for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own journal insert" on journal_entries for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own journal update" on journal_entries for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
@@ -107,8 +132,13 @@ create policy "own journal delete" on journal_entries for delete using (vehicle_
 -- a path starting with the owning user's id, and the policies below only allow
 -- a user to touch objects under their own folder.
 
-insert into storage.buckets (id, name, public) values ('vehicle-photos', 'vehicle-photos', false);
+insert into storage.buckets (id, name, public) values ('vehicle-photos', 'vehicle-photos', false)
+  on conflict (id) do nothing;
 
+drop policy if exists "own photos select" on storage.objects;
+drop policy if exists "own photos insert" on storage.objects;
+drop policy if exists "own photos update" on storage.objects;
+drop policy if exists "own photos delete" on storage.objects;
 create policy "own photos select" on storage.objects for select
   using (bucket_id = 'vehicle-photos' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "own photos insert" on storage.objects for insert
