@@ -114,7 +114,7 @@ function dbVehicleToLocal(row) {
     id: row.id, vin: row.vin, make: row.make, model: row.model, year: row.year, trim: row.trim,
     startDate: row.start_date, targetDate: row.target_date, coverPhoto: row.cover_photo_path,
     vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [],
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -190,8 +190,12 @@ function dbMaintenanceToLocal(row) {
   };
 }
 
+function dbFuelToLocal(row) {
+  return { id: row.id, vehicleId: row.vehicle_id, date: row.date, mileage: row.mileage, gallons: Number(row.gallons), totalCost: Number(row.total_cost), fullTank: row.full_tank, notes: row.notes };
+}
+
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -201,6 +205,7 @@ async function loadAllData() {
     supabase.from('checklist_items').select('*'),
     supabase.from('favorite_parts').select('*'),
     supabase.from('maintenance_items').select('*'),
+    supabase.from('fuel_logs').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -212,8 +217,31 @@ async function loadAllData() {
     v.checklist = (checklistRes.data || []).filter(r => r.vehicle_id === v.id).map(dbChecklistToLocal);
     v.favorites = (favoritesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFavoriteToLocal);
     v.maintenance = (maintenanceRes.data || []).filter(r => r.vehicle_id === v.id).map(dbMaintenanceToLocal);
+    v.fuel = (fuelRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFuelToLocal);
   });
   data = { vehicles };
+}
+
+// --- Fuel log / MPG ---
+
+function computeFuelStats(v) {
+  const sorted = v.fuel.slice().sort((a, b) => a.mileage - b.mileage);
+  let totalDistance = 0;
+  let totalGallons = 0;
+  const withMpg = sorted.map((entry, idx) => {
+    let mpg = null;
+    if (idx > 0 && entry.fullTank) {
+      const distance = entry.mileage - sorted[idx - 1].mileage;
+      if (distance > 0 && entry.gallons > 0) {
+        mpg = distance / entry.gallons;
+        totalDistance += distance;
+        totalGallons += entry.gallons;
+      }
+    }
+    return { ...entry, mpg };
+  });
+  const avgMpg = totalGallons > 0 ? totalDistance / totalGallons : null;
+  return { entries: withMpg.slice().reverse(), avgMpg };
 }
 
 // --- Maintenance due-tracking ---
@@ -1310,8 +1338,128 @@ function openMaintenanceModal(v, existing) {
   });
 }
 
+function renderFuelSection(v) {
+  const section = document.createElement('div');
+  section.className = 'section';
+  const { entries, avgMpg } = computeFuelStats(v);
+  const totalCost = v.fuel.reduce((s, f) => s + f.totalCost, 0);
+
+  const secHeader = document.createElement('div');
+  secHeader.className = 'section-header';
+  secHeader.innerHTML = `<h3>Fuel log</h3><span class="section-sub">${avgMpg != null ? `${avgMpg.toFixed(1)} avg MPG · ${money(totalCost)} spent on fuel` : 'Log fill-ups to track MPG'}</span>`;
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Log fill-up';
+  addBtn.addEventListener('click', () => openFuelModal(v));
+  secHeader.appendChild(addBtn);
+  section.appendChild(secHeader);
+
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No fill-ups logged yet.';
+    section.appendChild(empty);
+    return section;
+  }
+
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Date</th><th>Mileage</th><th>Gallons</th><th>Cost</th><th>MPG</th><th></th></tr></thead><tbody></tbody>';
+  const tbody = table.querySelector('tbody');
+  entries.forEach(entry => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${formatDate(entry.date)}</td>
+      <td>${entry.mileage.toLocaleString()}${entry.fullTank ? '' : ' <span class="section-sub">(partial)</span>'}</td>
+      <td>${entry.gallons.toFixed(2)}</td>
+      <td class="cost">${money(entry.totalCost)}</td>
+      <td>${entry.mpg != null ? entry.mpg.toFixed(1) : '—'}</td>
+      <td class="row-actions"></td>
+    `;
+    const cell = tr.querySelector('.row-actions');
+    const editBtn = document.createElement('button');
+    editBtn.className = 'small';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openFuelModal(v, entry));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'small danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => deleteFuelEntry(v, entry));
+    cell.appendChild(editBtn);
+    cell.appendChild(delBtn);
+    tbody.appendChild(tr);
+  });
+  section.appendChild(table);
+  return section;
+}
+
+async function updateVehicleMileageIfHigher(v, mileage) {
+  if (mileage != null && (v.currentMileage == null || mileage > v.currentMileage)) {
+    const { error } = await supabase.from('vehicles').update({ current_mileage: mileage }).eq('id', v.id);
+    if (!error) v.currentMileage = mileage;
+  }
+}
+
+async function deleteFuelEntry(v, entry) {
+  if (!confirm('Delete this fill-up?')) return;
+  const { error } = await supabase.from('fuel_logs').delete().eq('id', entry.id);
+  if (error) { alert('Could not delete: ' + error.message); return; }
+  v.fuel = v.fuel.filter(x => x.id !== entry.id);
+  render();
+}
+
+function openFuelModal(v, existing) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  const isEdit = !!existing;
+  modal.innerHTML = `
+    <h2>${isEdit ? 'Edit fill-up' : 'Log fill-up'}</h2>
+    <div class="field-row">
+      <div class="field"><label>Date</label><input type="date" id="fu-date" value="${isEdit ? existing.date || '' : new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>Odometer (mi)</label><input type="number" id="fu-mileage" value="${isEdit ? existing.mileage : ''}" placeholder="87500"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Gallons</label><input type="number" step="0.01" id="fu-gallons" value="${isEdit ? existing.gallons : ''}" placeholder="12.4"></div>
+      <div class="field"><label>Total cost ($)</label><input type="number" step="0.01" id="fu-cost" value="${isEdit ? existing.totalCost : ''}" placeholder="45.60"></div>
+    </div>
+    <div class="field checkbox-field"><label><input type="checkbox" id="fu-full" ${!isEdit || existing.fullTank ? 'checked' : ''}> Filled to full (needed for accurate MPG)</label></div>
+    <div class="field"><label>Notes</label><input type="text" id="fu-notes" value="${isEdit ? escapeHtml(existing.notes || '') : ''}" placeholder="Station, fuel grade, etc."></div>
+    <div class="modal-actions">
+      <button id="fu-cancel">Cancel</button>
+      <button class="primary" id="fu-save">${isEdit ? 'Save changes' : 'Log fill-up'}</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#fu-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#fu-save').addEventListener('click', async () => {
+    const mileage = parseInt(modal.querySelector('#fu-mileage').value, 10);
+    const gallons = parseFloat(modal.querySelector('#fu-gallons').value);
+    if (isNaN(mileage) || mileage < 0) { alert('Enter a valid odometer reading.'); return; }
+    if (isNaN(gallons) || gallons <= 0) { alert('Enter a valid number of gallons.'); return; }
+    const fields = {
+      date: modal.querySelector('#fu-date').value || null,
+      mileage,
+      gallons,
+      total_cost: parseFloat(modal.querySelector('#fu-cost').value) || 0,
+      full_tank: modal.querySelector('#fu-full').checked,
+      notes: modal.querySelector('#fu-notes').value.trim(),
+    };
+    if (isEdit) {
+      const { error } = await supabase.from('fuel_logs').update(fields).eq('id', existing.id);
+      if (error) { alert('Could not save: ' + error.message); return; }
+      Object.assign(existing, { date: fields.date, mileage: fields.mileage, gallons: fields.gallons, totalCost: fields.total_cost, fullTank: fields.full_tank, notes: fields.notes });
+    } else {
+      const { data: row, error } = await supabase.from('fuel_logs').insert({ vehicle_id: v.id, ...fields }).select().single();
+      if (error) { alert('Could not log fill-up: ' + error.message); return; }
+      v.fuel.push(dbFuelToLocal(row));
+    }
+    await updateVehicleMileageIfHigher(v, mileage);
+    backdrop.remove();
+    render();
+  });
+}
+
 function renderJournalTab(v) {
   const wrap = document.createElement('div');
+  wrap.appendChild(renderFuelSection(v));
   wrap.appendChild(renderMaintenanceSection(v));
   wrap.appendChild(renderChecklistSection(v));
 
