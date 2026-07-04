@@ -1773,6 +1773,17 @@ supabase.auth.onAuthStateChange((event, session) => {
   // (e.g. INITIAL_SESSION then SIGNED_IN) — ignore all of them until boot()
   // has finished, so a late event can't stomp on the restored route.
   if (!bootedOnce) return;
+
+  // Supabase also fires events for routine session upkeep (token refresh on
+  // tab focus, etc.) that are not a real sign-in/out. Only reset the view for
+  // an actual transition between signed-out and signed-in; otherwise just
+  // keep the session fresh without disturbing whatever the user is looking at.
+  const wasSignedIn = !!currentUser;
+  const isSignedIn = !!session?.user;
+  if (wasSignedIn === isSignedIn) {
+    currentUser = session?.user || null;
+    return;
+  }
   applySession(session);
 });
 
