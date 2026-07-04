@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vehicle Project Tracker</title>
+<meta name="theme-color" content="#2a78d6">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header>
+  <h1>Vehicle Project Tracker</h1>
+  <div class="actions">
+    <span id="signedInBar" style="display:none; align-items:center; gap:10px;" class="section-sub">
+      <span id="userEmail"></span>
+      <button id="signOutBtn" class="small">Sign out</button>
+    </span>
+    <button id="exportBtn" style="display:none">Export backup</button>
+    <button class="primary" id="newVehicleBtn" style="display:none">+ New Vehicle Project</button>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<footer>Your data lives in your Supabase project and syncs across devices. Photos are stored privately — only your account can see them.</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
