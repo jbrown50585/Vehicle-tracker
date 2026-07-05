@@ -80,7 +80,7 @@ let authReady = false;
 let authMode = 'signin';
 let authError = '';
 let authInfo = '';
-let data = { vehicles: [] };
+let data = { vehicles: [], contacts: [] };
 let currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
 
 // --- URL routing ---
@@ -233,9 +233,12 @@ function dbNoteToLocal(row) {
 function dbCollaboratorToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, email: row.email, createdAt: row.created_at };
 }
+function dbContactToLocal(row) {
+  return { id: row.id, email: row.email, nickname: row.nickname };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes, contactsRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -248,6 +251,7 @@ async function loadAllData() {
     supabase.from('fuel_logs').select('*'),
     supabase.from('vehicle_notes').select('*'),
     supabase.from('vehicle_collaborators').select('*'),
+    supabase.from('known_collaborators').select('*').order('nickname'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -263,7 +267,7 @@ async function loadAllData() {
     v.notes = (notesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbNoteToLocal);
     v.collaborators = (collabRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCollaboratorToLocal);
   });
-  data = { vehicles };
+  data = { vehicles, contacts: (contactsRes.data || []).map(dbContactToLocal) };
 }
 
 // --- Fuel log / MPG ---
@@ -700,6 +704,11 @@ async function deleteVehicle(v) {
   navigate({ screen: 'list', vehicleId: null, tab: 'budget' });
 }
 
+function contactLabelFor(email) {
+  const contact = data.contacts.find(c => c.email.toLowerCase() === email.toLowerCase());
+  return contact && contact.nickname ? `${contact.nickname} (${email})` : email;
+}
+
 function openCollaboratorsModal(v, isOwner) {
   const modal = document.createElement('div');
   modal.className = 'modal';
@@ -710,8 +719,16 @@ function openCollaboratorsModal(v, isOwner) {
       : 'People with access to this shared project.'}</div>
     <div id="collab-list"></div>
     ${isOwner ? `
-      <div class="field-row" style="margin-top:14px;">
+      <div class="section" style="margin-top:16px;">
+        <label class="section-sub">Quick-pick a saved contact</label>
+        <select id="collab-contact-select" style="width:100%; margin-top:4px; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary);">
+          <option value="">— Choose a saved contact —</option>
+          ${data.contacts.map(c => `<option value="${c.id}">${escapeHtml(c.nickname ? `${c.nickname} (${c.email})` : c.email)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field-row" style="margin-top:10px;">
         <input type="email" id="collab-email" placeholder="their@email.com" style="flex:1; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary);">
+        <input type="text" id="collab-nickname" placeholder="Nickname (optional)" style="flex:1; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary);">
         <button class="primary" id="collab-invite">Invite</button>
       </div>
     ` : ''}
@@ -734,7 +751,7 @@ function openCollaboratorsModal(v, isOwner) {
     const tbody = table.querySelector('tbody');
     v.collaborators.forEach(c => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(c.email)}</td><td class="section-sub">${formatDate(c.createdAt ? c.createdAt.slice(0, 10) : '')}</td><td class="row-actions"></td>`;
+      tr.innerHTML = `<td>${escapeHtml(contactLabelFor(c.email))}</td><td class="section-sub">${formatDate(c.createdAt ? c.createdAt.slice(0, 10) : '')}</td><td class="row-actions"></td>`;
       if (isOwner) {
         const cell = tr.querySelector('.row-actions');
         const removeBtn = document.createElement('button');
@@ -755,9 +772,19 @@ function openCollaboratorsModal(v, isOwner) {
   renderList();
 
   if (isOwner) {
+    const emailInput = modal.querySelector('#collab-email');
+    const nicknameInput = modal.querySelector('#collab-nickname');
+    modal.querySelector('#collab-contact-select').addEventListener('change', (e) => {
+      const contact = data.contacts.find(c => c.id === e.target.value);
+      if (contact) {
+        emailInput.value = contact.email;
+        nicknameInput.value = contact.nickname || '';
+      }
+    });
+
     modal.querySelector('#collab-invite').addEventListener('click', async () => {
-      const emailInput = modal.querySelector('#collab-email');
       const email = emailInput.value.trim().toLowerCase();
+      const nickname = nicknameInput.value.trim();
       if (!email || !email.includes('@')) { alert('Enter a valid email address.'); return; }
       const { data: row, error } = await supabase.from('vehicle_collaborators').insert({ vehicle_id: v.id, email }).select().single();
       if (error) {
@@ -765,7 +792,20 @@ function openCollaboratorsModal(v, isOwner) {
         return;
       }
       v.collaborators.push(dbCollaboratorToLocal(row));
+
+      const { data: contactRow, error: contactErr } = await supabase
+        .from('known_collaborators')
+        .upsert({ owner_id: currentUser.id, email, nickname: nickname || null }, { onConflict: 'owner_id,email' })
+        .select()
+        .single();
+      if (!contactErr) {
+        const existingContact = data.contacts.find(c => c.email.toLowerCase() === email);
+        if (existingContact) Object.assign(existingContact, dbContactToLocal(contactRow));
+        else data.contacts.push(dbContactToLocal(contactRow));
+      }
+
       emailInput.value = '';
+      nicknameInput.value = '';
       renderList();
     });
   }
@@ -2597,7 +2637,7 @@ async function applySession(session, options = {}) {
       if (!options.restoreRoute) history.replaceState(null, '', '/');
     }
   } else {
-    data = { vehicles: [] };
+    data = { vehicles: [], contacts: [] };
     currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
     history.replaceState(null, '', '/');
   }

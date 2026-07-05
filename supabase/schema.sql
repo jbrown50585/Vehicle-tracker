@@ -130,6 +130,24 @@ create table if not exists checklist_items (
   created_at timestamptz not null default now()
 );
 
+create table if not exists known_collaborators (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  email text not null,
+  nickname text,
+  created_at timestamptz not null default now(),
+  unique (owner_id, email)
+);
+alter table known_collaborators enable row level security;
+drop policy if exists "own contacts select" on known_collaborators;
+drop policy if exists "own contacts insert" on known_collaborators;
+drop policy if exists "own contacts update" on known_collaborators;
+drop policy if exists "own contacts delete" on known_collaborators;
+create policy "own contacts select" on known_collaborators for select using (owner_id = auth.uid());
+create policy "own contacts insert" on known_collaborators for insert with check (owner_id = auth.uid());
+create policy "own contacts update" on known_collaborators for update using (owner_id = auth.uid());
+create policy "own contacts delete" on known_collaborators for delete using (owner_id = auth.uid());
+
 create table if not exists vehicle_collaborators (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
