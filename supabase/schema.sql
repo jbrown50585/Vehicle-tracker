@@ -86,10 +86,12 @@ create table if not exists vehicle_notes (
   text text not null,
   created_by uuid references auth.users(id),
   author_email text,
+  edited_at timestamptz,
   created_at timestamptz not null default now()
 );
 alter table vehicle_notes add column if not exists created_by uuid references auth.users(id);
 alter table vehicle_notes add column if not exists author_email text;
+alter table vehicle_notes add column if not exists edited_at timestamptz;
 
 create table if not exists vehicle_views (
   id uuid primary key default gen_random_uuid(),

@@ -240,7 +240,7 @@ function dbFuelToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, date: row.date, mileage: row.mileage, gallons: Number(row.gallons), totalCost: Number(row.total_cost), fullTank: row.full_tank, notes: row.notes, createdAt: row.created_at };
 }
 function dbNoteToLocal(row) {
-  return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at, authorEmail: row.author_email };
+  return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at, authorEmail: row.author_email, editedAt: row.edited_at };
 }
 function dbCollaboratorToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, email: row.email, createdAt: row.created_at };
@@ -2065,12 +2065,20 @@ function renderNotesTab(v) {
     const authorLabel = note.authorEmail ? contactLabelFor(note.authorEmail) : 'Unknown';
     const card = document.createElement('div');
     card.className = 'journal-entry';
-    card.innerHTML = `<div class="date"><strong>${escapeHtml(isMine ? 'You' : authorLabel)}</strong> &middot; ${new Date(note.createdAt).toLocaleString()}</div><div class="text">${escapeHtml(note.text)}</div>`;
+    card.innerHTML = `<div class="date"><strong>${escapeHtml(isMine ? 'You' : authorLabel)}</strong> &middot; ${new Date(note.createdAt).toLocaleString()}${note.editedAt ? ' <span class="section-sub">(edited)</span>' : ''}</div><div class="text">${escapeHtml(note.text)}</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'small';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openNoteEditModal(v, note));
     const delBtn = document.createElement('button');
     delBtn.className = 'small danger';
     delBtn.textContent = 'Delete';
     delBtn.addEventListener('click', () => deleteNote(v, note));
-    card.appendChild(delBtn);
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
     list.appendChild(card);
   });
   wrap.appendChild(list);
@@ -2083,6 +2091,38 @@ async function deleteNote(v, note) {
   if (error) { alert('Could not delete: ' + error.message); return; }
   v.notes = v.notes.filter(x => x.id !== note.id);
   render();
+}
+
+function openNoteEditModal(v, note) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <h2>Edit note</h2>
+    <textarea id="note-edit-text" style="width:100%; min-height:100px; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary); font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(note.text)}</textarea>
+    <div class="field-row" style="margin-top:10px; align-items:center;">
+      <button type="button" id="note-edit-mic" class="small">🎤 Start voice input</button>
+      <span class="section-sub" id="note-edit-mic-status"></span>
+    </div>
+    <div class="modal-actions">
+      <button id="note-edit-cancel">Cancel</button>
+      <button class="primary" id="note-edit-save">Save changes</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  const textarea = modal.querySelector('#note-edit-text');
+  attachSpeechToText(textarea, modal.querySelector('#note-edit-mic'), modal.querySelector('#note-edit-mic-status'));
+  modal.querySelector('#note-edit-cancel').addEventListener('click', () => backdrop.remove());
+  modal.querySelector('#note-edit-save').addEventListener('click', async () => {
+    const text = textarea.value.trim();
+    if (!text) { alert('Note text cannot be empty.'); return; }
+    const editedAt = new Date().toISOString();
+    const { error } = await supabase.from('vehicle_notes').update({ text, edited_at: editedAt }).eq('id', note.id);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    note.text = text;
+    note.editedAt = editedAt;
+    backdrop.remove();
+    render();
+  });
 }
 
 function renderJournalTab(v) {
