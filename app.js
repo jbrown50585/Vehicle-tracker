@@ -99,7 +99,10 @@ function parseRoute() {
     return { screen: 'detail', vehicleId: segments[1], tab };
   }
   if (segments[0] === 'projects' && (segments[1] === 'mine' || segments[1] === 'shared')) {
-    return { screen: 'list', category: segments[1], vehicleId: null, tab: 'budget' };
+    if (segments[2] === 'project' || segments[2] === 'maintenance') {
+      return { screen: 'list', ownership: segments[1], vehicleType: segments[2], vehicleId: null, tab: 'budget' };
+    }
+    return { screen: 'category', ownership: segments[1] };
   }
   return { screen: 'home' };
 }
@@ -107,8 +110,11 @@ function routeToPath(view) {
   if (view.screen === 'detail' && view.vehicleId) {
     return `/vehicle/${view.vehicleId}/${TAB_TO_SEGMENT[view.tab] || 'budget'}`;
   }
-  if (view.screen === 'list' && view.category) {
-    return `/projects/${view.category}`;
+  if (view.screen === 'list' && view.ownership && view.vehicleType) {
+    return `/projects/${view.ownership}/${view.vehicleType}`;
+  }
+  if (view.screen === 'category' && view.ownership) {
+    return `/projects/${view.ownership}`;
   }
   return '/';
 }
@@ -553,6 +559,7 @@ function render() {
     return;
   }
   if (currentView.screen === 'home') app.appendChild(renderHome());
+  else if (currentView.screen === 'category') app.appendChild(renderCategoryScreen(currentView.ownership));
   else if (currentView.screen === 'list') app.appendChild(renderList());
   else if (currentView.screen === 'detail') app.appendChild(renderDetail(currentView.vehicleId));
 
@@ -660,10 +667,14 @@ function renderVehicleCard(v) {
   return card;
 }
 
+function ownershipVehicles(ownership) {
+  return data.vehicles.filter(v => ownership === 'mine' ? v.ownerId === currentUser.id : v.ownerId !== currentUser.id);
+}
+
 function renderHome() {
   const wrap = document.createElement('div');
-  const ownVehicles = data.vehicles.filter(v => v.ownerId === currentUser.id);
-  const sharedVehicles = data.vehicles.filter(v => v.ownerId !== currentUser.id);
+  const ownVehicles = ownershipVehicles('mine');
+  const sharedVehicles = ownershipVehicles('shared');
   const sharedNewTotal = sharedVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
 
   if (data.vehicles.length === 0) {
@@ -681,7 +692,7 @@ function renderHome() {
     <div class="section-sub" style="margin-bottom:14px;">${ownVehicles.length} project${ownVehicles.length === 1 ? '' : 's'} you own</div>
     <div class="meter-remaining">${ownVehicles.length}</div>
   `;
-  mineCard.addEventListener('click', () => navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' }));
+  mineCard.addEventListener('click', () => navigate({ screen: 'category', ownership: 'mine' }));
   grid.appendChild(mineCard);
 
   const sharedCard = document.createElement('div');
@@ -691,8 +702,62 @@ function renderHome() {
     <div class="section-sub" style="margin-bottom:14px;">${sharedVehicles.length} project${sharedVehicles.length === 1 ? '' : 's'} shared with you</div>
     <div class="meter-remaining">${sharedVehicles.length}</div>
   `;
-  sharedCard.addEventListener('click', () => navigate({ screen: 'list', category: 'shared', vehicleId: null, tab: 'budget' }));
+  sharedCard.addEventListener('click', () => navigate({ screen: 'category', ownership: 'shared' }));
   grid.appendChild(sharedCard);
+
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+function renderCategoryScreen(ownership) {
+  const wrap = document.createElement('div');
+  const back = document.createElement('a');
+  back.className = 'back-link';
+  back.textContent = '← Home';
+  back.addEventListener('click', () => navigate({ screen: 'home' }));
+  wrap.appendChild(back);
+
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  header.innerHTML = `<h3>${ownership === 'mine' ? 'Your projects' : 'Shared with you'}</h3>`;
+  wrap.appendChild(header);
+
+  const vehicles = ownershipVehicles(ownership);
+  const projectVehicles = vehicles.filter(v => v.vehicleType !== 'maintenance');
+  const maintenanceVehicles = vehicles.filter(v => v.vehicleType === 'maintenance');
+
+  if (vehicles.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = ownership === 'mine' ? 'No vehicle projects yet. Click "+ New Vehicle Project" to add your first one.' : 'No one has shared a project with you yet.';
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+
+  const projectNew = projectVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
+  const projectCard = document.createElement('div');
+  projectCard.className = 'card';
+  projectCard.innerHTML = `
+    <h3>Restoration projects${projectNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${projectNew} new</span>` : ''}</h3>
+    <div class="section-sub" style="margin-bottom:14px;">${projectVehicles.length} project${projectVehicles.length === 1 ? '' : 's'}</div>
+    <div class="meter-remaining">${projectVehicles.length}</div>
+  `;
+  projectCard.addEventListener('click', () => navigate({ screen: 'list', ownership, vehicleType: 'project', vehicleId: null, tab: 'budget' }));
+  grid.appendChild(projectCard);
+
+  const maintNew = maintenanceVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
+  const maintCard = document.createElement('div');
+  maintCard.className = 'card';
+  maintCard.innerHTML = `
+    <h3>General maintenance${maintNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${maintNew} new</span>` : ''}</h3>
+    <div class="section-sub" style="margin-bottom:14px;">${maintenanceVehicles.length} vehicle${maintenanceVehicles.length === 1 ? '' : 's'}</div>
+    <div class="meter-remaining">${maintenanceVehicles.length}</div>
+  `;
+  maintCard.addEventListener('click', () => navigate({ screen: 'list', ownership, vehicleType: 'maintenance', vehicleId: null, tab: 'budget' }));
+  grid.appendChild(maintCard);
 
   wrap.appendChild(grid);
   return wrap;
@@ -700,29 +765,27 @@ function renderHome() {
 
 function renderList() {
   const wrap = document.createElement('div');
-  const category = currentView.category || 'mine';
+  const ownership = currentView.ownership || 'mine';
+  const vehicleType = currentView.vehicleType || 'project';
 
   const back = document.createElement('a');
   back.className = 'back-link';
-  back.textContent = '← Home';
-  back.addEventListener('click', () => navigate({ screen: 'home' }));
+  back.textContent = ownership === 'mine' ? '← Your projects' : '← Shared with you';
+  back.addEventListener('click', () => navigate({ screen: 'category', ownership }));
   wrap.appendChild(back);
 
-  const vehicles = data.vehicles.filter(v => category === 'mine' ? v.ownerId === currentUser.id : v.ownerId !== currentUser.id);
+  const vehicles = ownershipVehicles(ownership).filter(v => vehicleType === 'maintenance' ? v.vehicleType === 'maintenance' : v.vehicleType !== 'maintenance');
   const header = document.createElement('div');
   header.className = 'section-header';
-  if (category === 'mine') {
-    header.innerHTML = `<h3>Your projects</h3>`;
-  } else {
-    const sharedNewTotal = vehicles.reduce((s, v) => s + totalNewActivity(v), 0);
-    header.innerHTML = `<h3>Shared with you</h3><span class="section-sub">${sharedNewTotal > 0 ? `🔔 ${sharedNewTotal} new since you last looked` : 'Projects other people have shared with you'}</span>`;
-  }
+  const label = vehicleType === 'maintenance' ? 'General maintenance' : 'Restoration projects';
+  const sharedNewTotal = vehicles.reduce((s, v) => s + totalNewActivity(v), 0);
+  header.innerHTML = `<h3>${label}</h3><span class="section-sub">${sharedNewTotal > 0 ? `🔔 ${sharedNewTotal} new since you last looked` : (ownership === 'mine' ? '' : 'Projects other people have shared with you')}</span>`;
   wrap.appendChild(header);
 
   if (vehicles.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = category === 'mine' ? 'No vehicle projects yet. Click "+ New Vehicle Project" to add your first one.' : 'No one has shared a project with you yet.';
+    empty.textContent = ownership === 'mine' ? 'No vehicles here yet. Click "+ New Vehicle Project" to add one.' : 'Nothing here yet.';
     wrap.appendChild(empty);
     return wrap;
   }
@@ -740,10 +803,12 @@ function renderDetail(vehicleId) {
   if (!v) { wrap.innerHTML = '<div class="empty-state">Vehicle not found.</div>'; return wrap; }
 
   const isOwner = v.ownerId === currentUser.id;
+  const backOwnership = isOwner ? 'mine' : 'shared';
+  const backType = v.vehicleType === 'maintenance' ? 'maintenance' : 'project';
   const back = document.createElement('a');
   back.className = 'back-link';
-  back.textContent = isOwner ? '← Your projects' : '← Shared with you';
-  back.addEventListener('click', () => navigate({ screen: 'list', category: isOwner ? 'mine' : 'shared', vehicleId: null, tab: 'budget' }));
+  back.textContent = `← ${backType === 'maintenance' ? 'General maintenance' : 'Restoration projects'}`;
+  back.addEventListener('click', () => navigate({ screen: 'list', ownership: backOwnership, vehicleType: backType, vehicleId: null, tab: 'budget' }));
   wrap.appendChild(back);
 
   const header = document.createElement('div');
@@ -818,7 +883,7 @@ async function deleteVehicle(v) {
   const { error } = await supabase.from('vehicles').delete().eq('id', v.id);
   if (error) { alert('Could not delete: ' + error.message); return; }
   data.vehicles = data.vehicles.filter(x => x.id !== v.id);
-  navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' });
+  navigate({ screen: 'list', ownership: 'mine', vehicleType: v.vehicleType === 'maintenance' ? 'maintenance' : 'project', vehicleId: null, tab: 'budget' });
 }
 
 function contactLabelFor(email) {
@@ -2399,7 +2464,7 @@ function openVehicleModal(existing) {
       localVehicle.checklist = selectedType === 'maintenance' ? [] : await seedChecklist(vRow.id);
       data.vehicles.push(localVehicle);
       backdrop.remove();
-      navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' });
+      navigate({ screen: 'list', ownership: 'mine', vehicleType: selectedType === 'maintenance' ? 'maintenance' : 'project', vehicleId: null, tab: 'budget' });
       return;
     }
     backdrop.remove();
