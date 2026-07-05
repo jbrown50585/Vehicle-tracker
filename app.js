@@ -2218,7 +2218,7 @@ function openVehicleModal(existing) {
       Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
-      const { data: vRow, error } = await supabase.from('vehicles').insert(fields).select().single();
+      const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id }).select().single();
       if (error) {
         console.error('vehicle insert error', error);
         alert('Could not create project: ' + error.message + (error.details ? '\nDetails: ' + error.details : '') + (error.hint ? '\nHint: ' + error.hint : '') + (error.code ? '\nCode: ' + error.code : ''));
