@@ -37,14 +37,25 @@ const TRIM_PRESETS = [
   'TRD Sport', 'TRD Off-Road', 'TRD Pro', 'R-Line', 'Type R',
 ].sort();
 
-async function decodeTrimFromVin(vin) {
+function cleanVinValue(v) {
+  if (!v) return null;
+  const trimmed = String(v).trim();
+  if (!trimmed || trimmed === '0' || trimmed.toLowerCase() === 'not applicable') return null;
+  return trimmed;
+}
+async function decodeVehicleFromVin(vin) {
   if (!vin || vin.length !== 17) return null;
   try {
     const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${encodeURIComponent(vin)}?format=json`);
     const json = await res.json();
     const results = json.Results || [];
-    const trimVar = results.find(r => r.Variable === 'Trim' && r.Value) || results.find(r => r.Variable === 'Series' && r.Value);
-    return trimVar ? trimVar.Value : null;
+    const byVar = (name) => cleanVinValue((results.find(r => r.Variable === name) || {}).Value);
+    return {
+      year: byVar('Model Year'),
+      make: byVar('Make'),
+      model: byVar('Model'),
+      trim: byVar('Trim') || byVar('Series'),
+    };
   } catch (err) {
     return null;
   }
@@ -1736,6 +1747,14 @@ function openVehicleModal(existing) {
       </div>
       <div class="section-sub">A project seeds a restoration checklist and tracks a target finish date. Maintenance is ongoing — no checklist template, no target date.</div>
     </div>
+    <div class="field">
+      <label>VIN</label>
+      <input type="text" id="f-vin" value="${isEdit ? escapeHtml(existing.vin || '') : ''}" placeholder="17-character VIN">
+      <div class="field-row" style="margin-top:6px;">
+        <button type="button" id="f-vin-lookup" class="small">Look up vehicle from VIN</button>
+        <span class="section-sub" id="f-vin-lookup-status"></span>
+      </div>
+    </div>
     <div class="field-row">
       <div class="field"><label>Year</label><select id="f-year">${yearOptionsHtml(isEdit ? existing.year : null)}</select></div>
       <div class="field" style="flex:2">
@@ -1749,7 +1768,6 @@ function openVehicleModal(existing) {
       <select id="f-model-select" disabled><option value="">Select make first</option></select>
       <input type="text" id="f-model-other" placeholder="Enter model" style="display:none; margin-top:6px;">
     </div>
-    <div class="field"><label>VIN</label><input type="text" id="f-vin" value="${isEdit ? escapeHtml(existing.vin || '') : ''}" placeholder="17-character VIN"></div>
     <div class="field">
       <label>Trim</label>
       <select id="f-trim-select">
@@ -1758,10 +1776,6 @@ function openVehicleModal(existing) {
         <option value="${OTHER_VALUE}">Other (type it in)</option>
       </select>
       <input type="text" id="f-trim-other" placeholder="Enter trim" style="display:none; margin-top:6px;">
-      <div class="field-row" style="margin-top:6px;">
-        <button type="button" id="f-trim-from-vin" class="small">Look up from VIN</button>
-        <span class="section-sub" id="f-trim-vin-status"></span>
-      </div>
     </div>
     <div class="field"><label>Cover photo</label><input type="file" id="f-photo" accept="image/*"></div>
     <div id="f-photo-preview"></div>
@@ -1839,7 +1853,6 @@ function openVehicleModal(existing) {
 
   const trimSelect = modal.querySelector('#f-trim-select');
   const trimOther = modal.querySelector('#f-trim-other');
-  const trimVinStatus = modal.querySelector('#f-trim-vin-status');
 
   function setTrimValue(value) {
     const matched = TRIM_PRESETS.find(t => t.toLowerCase() === (value || '').toLowerCase());
@@ -1862,17 +1875,53 @@ function openVehicleModal(existing) {
     trimOther.style.display = trimSelect.value === OTHER_VALUE ? '' : 'none';
     if (trimSelect.value === OTHER_VALUE) trimOther.focus();
   });
-  modal.querySelector('#f-trim-from-vin').addEventListener('click', async () => {
-    const vin = modal.querySelector('#f-vin').value.trim();
-    if (vin.length !== 17) { trimVinStatus.textContent = 'Enter a full 17-character VIN first.'; return; }
-    trimVinStatus.textContent = 'Looking up…';
-    const trim = await decodeTrimFromVin(vin);
-    if (trim) {
-      setTrimValue(trim);
-      trimVinStatus.textContent = `Found: ${trim}`;
+
+  function setMakeValue(value) {
+    const matched = MAKES.find(m => m.toLowerCase() === (value || '').toLowerCase());
+    if (matched) {
+      makeSelect.value = matched;
+      makeOther.style.display = 'none';
+    } else if (value) {
+      makeSelect.value = OTHER_VALUE;
+      makeOther.style.display = '';
+      makeOther.value = value;
+      modelSelect.style.display = 'none';
     } else {
-      trimVinStatus.textContent = 'No trim found for this VIN — enter it manually.';
+      makeSelect.value = '';
     }
+  }
+
+  const vinLookupStatus = modal.querySelector('#f-vin-lookup-status');
+  modal.querySelector('#f-vin-lookup').addEventListener('click', async () => {
+    const vin = modal.querySelector('#f-vin').value.trim();
+    if (vin.length !== 17) { vinLookupStatus.textContent = 'Enter a full 17-character VIN first.'; return; }
+    vinLookupStatus.textContent = 'Looking up…';
+    const info = await decodeVehicleFromVin(vin);
+    if (!info || (!info.year && !info.make && !info.model && !info.trim)) {
+      vinLookupStatus.textContent = 'No data found for this VIN — enter the details manually.';
+      return;
+    }
+    if (info.year) {
+      const yearSelect = modal.querySelector('#f-year');
+      if (!yearSelect.querySelector(`option[value="${info.year}"]`)) {
+        yearSelect.insertAdjacentHTML('afterbegin', `<option value="${info.year}">${info.year}</option>`);
+      }
+      yearSelect.value = info.year;
+    }
+    if (info.make) {
+      setMakeValue(info.make);
+      if (makeSelect.value !== OTHER_VALUE) {
+        await loadModelsInto(modelSelect, makeSelect.value, info.model);
+        modelSelect.style.display = '';
+        modelOther.style.display = modelSelect.value === OTHER_VALUE ? '' : 'none';
+        if (modelSelect.value === OTHER_VALUE && info.model) modelOther.value = info.model;
+      } else if (info.model) {
+        modelOther.value = info.model;
+      }
+    }
+    if (info.trim) setTrimValue(info.trim);
+    const found = ['year', 'make', 'model', 'trim'].filter(k => info[k]).map(k => info[k]).join(' / ');
+    vinLookupStatus.textContent = `Found: ${found}`;
   });
 
   const photoState = { path: isEdit ? existing.coverPhoto : null, blob: null, previewUrl: null };
