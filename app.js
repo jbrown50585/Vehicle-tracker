@@ -81,7 +81,7 @@ let authMode = 'signin';
 let authError = '';
 let authInfo = '';
 let data = { vehicles: [], contacts: [] };
-let currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
+let currentView = { screen: 'home' };
 
 // --- URL routing ---
 // /                              -> vehicle list
@@ -98,11 +98,17 @@ function parseRoute() {
     const tab = SEGMENT_TO_TAB[segments[2]] || 'budget';
     return { screen: 'detail', vehicleId: segments[1], tab };
   }
-  return { screen: 'list', vehicleId: null, tab: 'budget' };
+  if (segments[0] === 'projects' && (segments[1] === 'mine' || segments[1] === 'shared')) {
+    return { screen: 'list', category: segments[1], vehicleId: null, tab: 'budget' };
+  }
+  return { screen: 'home' };
 }
 function routeToPath(view) {
   if (view.screen === 'detail' && view.vehicleId) {
     return `/vehicle/${view.vehicleId}/${TAB_TO_SEGMENT[view.tab] || 'budget'}`;
+  }
+  if (view.screen === 'list' && view.category) {
+    return `/projects/${view.category}`;
   }
   return '/';
 }
@@ -119,7 +125,7 @@ function navigate(view, options = {}) {
 window.addEventListener('popstate', () => {
   const route = parseRoute();
   currentView = (route.screen === 'detail' && !data.vehicles.some(v => v.id === route.vehicleId))
-    ? { screen: 'list', vehicleId: null, tab: 'budget' }
+    ? { screen: 'home' }
     : route;
   render();
 });
@@ -546,7 +552,8 @@ function render() {
     app.appendChild(renderAuthScreen());
     return;
   }
-  if (currentView.screen === 'list') app.appendChild(renderList());
+  if (currentView.screen === 'home') app.appendChild(renderHome());
+  else if (currentView.screen === 'list') app.appendChild(renderList());
   else if (currentView.screen === 'detail') app.appendChild(renderDetail(currentView.vehicleId));
 
   hydratePhotos(app);
@@ -653,40 +660,77 @@ function renderVehicleCard(v) {
   return card;
 }
 
-function renderList() {
+function renderHome() {
   const wrap = document.createElement('div');
+  const ownVehicles = data.vehicles.filter(v => v.ownerId === currentUser.id);
+  const sharedVehicles = data.vehicles.filter(v => v.ownerId !== currentUser.id);
+  const sharedNewTotal = sharedVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
+
   if (data.vehicles.length === 0) {
     wrap.innerHTML = '<div class="empty-state">No vehicle projects yet. Click "+ New Vehicle Project" to add your first one.</div>';
     return wrap;
   }
 
-  const ownVehicles = data.vehicles.filter(v => v.ownerId === currentUser.id);
-  const sharedVehicles = data.vehicles.filter(v => v.ownerId !== currentUser.id);
+  const grid = document.createElement('div');
+  grid.className = 'grid';
 
-  if (ownVehicles.length > 0) {
-    const header = document.createElement('div');
-    header.className = 'section-header';
+  const mineCard = document.createElement('div');
+  mineCard.className = 'card';
+  mineCard.innerHTML = `
+    <h3>Your projects</h3>
+    <div class="section-sub" style="margin-bottom:14px;">${ownVehicles.length} project${ownVehicles.length === 1 ? '' : 's'} you own</div>
+    <div class="meter-remaining">${ownVehicles.length}</div>
+  `;
+  mineCard.addEventListener('click', () => navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' }));
+  grid.appendChild(mineCard);
+
+  const sharedCard = document.createElement('div');
+  sharedCard.className = 'card';
+  sharedCard.innerHTML = `
+    <h3>Shared with you${sharedNewTotal > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${sharedNewTotal} new</span>` : ''}</h3>
+    <div class="section-sub" style="margin-bottom:14px;">${sharedVehicles.length} project${sharedVehicles.length === 1 ? '' : 's'} shared with you</div>
+    <div class="meter-remaining">${sharedVehicles.length}</div>
+  `;
+  sharedCard.addEventListener('click', () => navigate({ screen: 'list', category: 'shared', vehicleId: null, tab: 'budget' }));
+  grid.appendChild(sharedCard);
+
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+function renderList() {
+  const wrap = document.createElement('div');
+  const category = currentView.category || 'mine';
+
+  const back = document.createElement('a');
+  back.className = 'back-link';
+  back.textContent = '← Home';
+  back.addEventListener('click', () => navigate({ screen: 'home' }));
+  wrap.appendChild(back);
+
+  const vehicles = data.vehicles.filter(v => category === 'mine' ? v.ownerId === currentUser.id : v.ownerId !== currentUser.id);
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  if (category === 'mine') {
     header.innerHTML = `<h3>Your projects</h3>`;
-    wrap.appendChild(header);
-    const grid = document.createElement('div');
-    grid.className = 'grid';
-    ownVehicles.forEach(v => grid.appendChild(renderVehicleCard(v)));
-    wrap.appendChild(grid);
-  }
-
-  if (sharedVehicles.length > 0) {
-    const sharedNewTotal = sharedVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
-    const header = document.createElement('div');
-    header.className = 'section-header';
-    header.style.marginTop = ownVehicles.length > 0 ? '24px' : '0';
+  } else {
+    const sharedNewTotal = vehicles.reduce((s, v) => s + totalNewActivity(v), 0);
     header.innerHTML = `<h3>Shared with you</h3><span class="section-sub">${sharedNewTotal > 0 ? `🔔 ${sharedNewTotal} new since you last looked` : 'Projects other people have shared with you'}</span>`;
-    wrap.appendChild(header);
-    const grid = document.createElement('div');
-    grid.className = 'grid';
-    sharedVehicles.forEach(v => grid.appendChild(renderVehicleCard(v)));
-    wrap.appendChild(grid);
+  }
+  wrap.appendChild(header);
+
+  if (vehicles.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = category === 'mine' ? 'No vehicle projects yet. Click "+ New Vehicle Project" to add your first one.' : 'No one has shared a project with you yet.';
+    wrap.appendChild(empty);
+    return wrap;
   }
 
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  vehicles.forEach(v => grid.appendChild(renderVehicleCard(v)));
+  wrap.appendChild(grid);
   return wrap;
 }
 
@@ -695,13 +739,13 @@ function renderDetail(vehicleId) {
   const wrap = document.createElement('div');
   if (!v) { wrap.innerHTML = '<div class="empty-state">Vehicle not found.</div>'; return wrap; }
 
+  const isOwner = v.ownerId === currentUser.id;
   const back = document.createElement('a');
   back.className = 'back-link';
-  back.textContent = '← All vehicle projects';
-  back.addEventListener('click', () => navigate({ screen: 'list', vehicleId: null, tab: 'budget' }));
+  back.textContent = isOwner ? '← Your projects' : '← Shared with you';
+  back.addEventListener('click', () => navigate({ screen: 'list', category: isOwner ? 'mine' : 'shared', vehicleId: null, tab: 'budget' }));
   wrap.appendChild(back);
 
-  const isOwner = v.ownerId === currentUser.id;
   const header = document.createElement('div');
   header.className = 'detail-header';
   header.innerHTML = `
@@ -774,7 +818,7 @@ async function deleteVehicle(v) {
   const { error } = await supabase.from('vehicles').delete().eq('id', v.id);
   if (error) { alert('Could not delete: ' + error.message); return; }
   data.vehicles = data.vehicles.filter(x => x.id !== v.id);
-  navigate({ screen: 'list', vehicleId: null, tab: 'budget' });
+  navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' });
 }
 
 function contactLabelFor(email) {
@@ -2354,6 +2398,9 @@ function openVehicleModal(existing) {
       localVehicle.phases = [dbPhaseToLocal(phRow)];
       localVehicle.checklist = selectedType === 'maintenance' ? [] : await seedChecklist(vRow.id);
       data.vehicles.push(localVehicle);
+      backdrop.remove();
+      navigate({ screen: 'list', category: 'mine', vehicleId: null, tab: 'budget' });
+      return;
     }
     backdrop.remove();
     render();
@@ -2705,9 +2752,9 @@ async function applySession(session, options = {}) {
   authReady = true;
   if (currentUser) {
     await loadAllData();
-    const route = options.restoreRoute ? parseRoute() : { screen: 'list', vehicleId: null, tab: 'budget' };
+    const route = options.restoreRoute ? parseRoute() : { screen: 'home' };
     if (route.screen === 'detail' && !data.vehicles.some(v => v.id === route.vehicleId)) {
-      currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
+      currentView = { screen: 'home' };
       history.replaceState(null, '', '/');
     } else {
       currentView = route;
@@ -2715,7 +2762,7 @@ async function applySession(session, options = {}) {
     }
   } else {
     data = { vehicles: [], contacts: [] };
-    currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
+    currentView = { screen: 'home' };
     history.replaceState(null, '', '/');
   }
   render();
