@@ -147,7 +147,8 @@ function dbVehicleToLocal(row) {
     vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
     purchasePrice: row.purchase_price != null ? Number(row.purchase_price) : null,
     salePrice: row.sale_price != null ? Number(row.sale_price) : null,
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [],
+    ownerId: row.user_id,
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [], collaborators: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -229,9 +230,12 @@ function dbFuelToLocal(row) {
 function dbNoteToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at };
 }
+function dbCollaboratorToLocal(row) {
+  return { id: row.id, vehicleId: row.vehicle_id, email: row.email, createdAt: row.created_at };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -243,6 +247,7 @@ async function loadAllData() {
     supabase.from('maintenance_items').select('*'),
     supabase.from('fuel_logs').select('*'),
     supabase.from('vehicle_notes').select('*'),
+    supabase.from('vehicle_collaborators').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -256,6 +261,7 @@ async function loadAllData() {
     v.maintenance = (maintenanceRes.data || []).filter(r => r.vehicle_id === v.id).map(dbMaintenanceToLocal);
     v.fuel = (fuelRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFuelToLocal);
     v.notes = (notesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbNoteToLocal);
+    v.collaborators = (collabRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCollaboratorToLocal);
   });
   data = { vehicles };
 }
@@ -607,7 +613,7 @@ function renderList() {
     card.innerHTML = `
       ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
       <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}</div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${v.ownerId !== currentUser.id ? ' <span class="chip">Shared</span>' : ''}${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}</div>
       <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
       <div class="meter-row">
         <span class="meter-remaining">${money(remaining)}</span>
@@ -634,27 +640,34 @@ function renderDetail(vehicleId) {
   back.addEventListener('click', () => navigate({ screen: 'list', vehicleId: null, tab: 'budget' }));
   wrap.appendChild(back);
 
+  const isOwner = v.ownerId === currentUser.id;
   const header = document.createElement('div');
   header.className = 'detail-header';
   header.innerHTML = `
     ${v.coverPhoto ? `<img class="lazy-photo detail-cover" data-photo-path="${v.coverPhoto}">` : ''}
     <div>
       <h2>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h2>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${maintenanceAlertCount(v) > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${maintenanceAlertCount(v)} due</span>` : ''}</div>
+      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${!isOwner ? ' <span class="chip">Shared with you</span>' : ''}${maintenanceAlertCount(v) > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${maintenanceAlertCount(v)} due</span>` : ''}</div>
       <div class="vin">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
     </div>
   `;
   const headerBtns = document.createElement('div');
   headerBtns.className = 'actions';
-  const editBtn = document.createElement('button');
-  editBtn.textContent = 'Edit details';
-  editBtn.addEventListener('click', () => openVehicleModal(v));
-  const delBtn = document.createElement('button');
-  delBtn.className = 'danger';
-  delBtn.textContent = 'Delete project';
-  delBtn.addEventListener('click', () => deleteVehicle(v));
-  headerBtns.appendChild(editBtn);
-  headerBtns.appendChild(delBtn);
+  const shareBtn = document.createElement('button');
+  shareBtn.textContent = isOwner ? 'Share project' : `Collaborators (${v.collaborators.length})`;
+  shareBtn.addEventListener('click', () => openCollaboratorsModal(v, isOwner));
+  headerBtns.appendChild(shareBtn);
+  if (isOwner) {
+    const editBtn = document.createElement('button');
+    editBtn.textContent = 'Edit details';
+    editBtn.addEventListener('click', () => openVehicleModal(v));
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger';
+    delBtn.textContent = 'Delete project';
+    delBtn.addEventListener('click', () => deleteVehicle(v));
+    headerBtns.appendChild(editBtn);
+    headerBtns.appendChild(delBtn);
+  }
   header.appendChild(headerBtns);
   wrap.appendChild(header);
 
@@ -685,6 +698,77 @@ async function deleteVehicle(v) {
   if (error) { alert('Could not delete: ' + error.message); return; }
   data.vehicles = data.vehicles.filter(x => x.id !== v.id);
   navigate({ screen: 'list', vehicleId: null, tab: 'budget' });
+}
+
+function openCollaboratorsModal(v, isOwner) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <h2>${isOwner ? 'Share this project' : 'Collaborators'}</h2>
+    <div class="section-sub" style="margin-bottom:14px;">${isOwner
+      ? 'Invite someone by email — once they sign in with that email, they\'ll see this project and can add/edit parts, budget, notes, and more, the same as you. They can\'t rename or delete the project or manage other collaborators.'
+      : 'People with access to this shared project.'}</div>
+    <div id="collab-list"></div>
+    ${isOwner ? `
+      <div class="field-row" style="margin-top:14px;">
+        <input type="email" id="collab-email" placeholder="their@email.com" style="flex:1; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary);">
+        <button class="primary" id="collab-invite">Invite</button>
+      </div>
+    ` : ''}
+    <div class="modal-actions">
+      <button id="collab-close">Close</button>
+    </div>
+  `;
+  const backdrop = openModalBackdrop(modal);
+  modal.querySelector('#collab-close').addEventListener('click', () => backdrop.remove());
+
+  function renderList() {
+    const listEl = modal.querySelector('#collab-list');
+    if (v.collaborators.length === 0) {
+      listEl.innerHTML = '<div class="section-sub">No collaborators yet.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    const table = document.createElement('table');
+    table.innerHTML = '<tbody></tbody>';
+    const tbody = table.querySelector('tbody');
+    v.collaborators.forEach(c => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(c.email)}</td><td class="section-sub">${formatDate(c.createdAt ? c.createdAt.slice(0, 10) : '')}</td><td class="row-actions"></td>`;
+      if (isOwner) {
+        const cell = tr.querySelector('.row-actions');
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'small danger';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', async () => {
+          const { error } = await supabase.from('vehicle_collaborators').delete().eq('id', c.id);
+          if (error) { alert('Could not remove: ' + error.message); return; }
+          v.collaborators = v.collaborators.filter(x => x.id !== c.id);
+          renderList();
+        });
+        cell.appendChild(removeBtn);
+      }
+      tbody.appendChild(tr);
+    });
+    listEl.appendChild(table);
+  }
+  renderList();
+
+  if (isOwner) {
+    modal.querySelector('#collab-invite').addEventListener('click', async () => {
+      const emailInput = modal.querySelector('#collab-email');
+      const email = emailInput.value.trim().toLowerCase();
+      if (!email || !email.includes('@')) { alert('Enter a valid email address.'); return; }
+      const { data: row, error } = await supabase.from('vehicle_collaborators').insert({ vehicle_id: v.id, email }).select().single();
+      if (error) {
+        alert(error.message.includes('duplicate') ? 'That person already has access.' : 'Could not invite: ' + error.message);
+        return;
+      }
+      v.collaborators.push(dbCollaboratorToLocal(row));
+      emailInput.value = '';
+      renderList();
+    });
+  }
 }
 
 // --- Budget tab ---

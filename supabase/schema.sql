@@ -130,9 +130,38 @@ create table if not exists checklist_items (
   created_at timestamptz not null default now()
 );
 
--- Row Level Security: every user can only ever see/touch their own rows.
+create table if not exists vehicle_collaborators (
+  id uuid primary key default gen_random_uuid(),
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  email text not null,
+  invited_by uuid references auth.users(id),
+  created_at timestamptz not null default now(),
+  unique (vehicle_id, email)
+);
+
+-- Row Level Security: every user can see/touch their own vehicles, plus any
+-- vehicle they've been added to as a collaborator (matched by their login
+-- email). has_vehicle_access() is the single source of truth for that check —
+-- every child table's policies call it instead of repeating the logic.
+
+create or replace function has_vehicle_access(vid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    exists (select 1 from vehicles where id = vid and user_id = auth.uid())
+    or exists (
+      select 1 from vehicle_collaborators
+      where vehicle_id = vid and lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+    );
+$$;
+grant execute on function has_vehicle_access(uuid) to authenticated;
 
 alter table vehicles enable row level security;
+alter table vehicle_collaborators enable row level security;
 alter table phases enable row level security;
 alter table parts enable row level security;
 alter table labor enable row level security;
@@ -148,104 +177,114 @@ drop policy if exists "own vehicles select" on vehicles;
 drop policy if exists "own vehicles insert" on vehicles;
 drop policy if exists "own vehicles update" on vehicles;
 drop policy if exists "own vehicles delete" on vehicles;
-create policy "own vehicles select" on vehicles for select using (user_id = auth.uid());
-create policy "own vehicles insert" on vehicles for insert with check (user_id = auth.uid());
-create policy "own vehicles update" on vehicles for update using (user_id = auth.uid());
-create policy "own vehicles delete" on vehicles for delete using (user_id = auth.uid());
+-- Owner or collaborator can view; only the owner can rename/delete the vehicle
+-- itself (collaborators get full access to everything they work on inside it).
+create policy "vehicles select" on vehicles for select using (has_vehicle_access(id));
+create policy "vehicles insert" on vehicles for insert with check (user_id = auth.uid());
+create policy "vehicles update" on vehicles for update using (user_id = auth.uid());
+create policy "vehicles delete" on vehicles for delete using (user_id = auth.uid());
+
+drop policy if exists "collaborators select" on vehicle_collaborators;
+drop policy if exists "collaborators insert" on vehicle_collaborators;
+drop policy if exists "collaborators delete" on vehicle_collaborators;
+create policy "collaborators select" on vehicle_collaborators for select using (has_vehicle_access(vehicle_id));
+create policy "collaborators insert" on vehicle_collaborators for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "collaborators delete" on vehicle_collaborators for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
 drop policy if exists "own phases select" on phases;
 drop policy if exists "own phases insert" on phases;
 drop policy if exists "own phases update" on phases;
 drop policy if exists "own phases delete" on phases;
-create policy "own phases select" on phases for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own phases insert" on phases for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own phases update" on phases for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own phases delete" on phases for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "phases select" on phases for select using (has_vehicle_access(vehicle_id));
+create policy "phases insert" on phases for insert with check (has_vehicle_access(vehicle_id));
+create policy "phases update" on phases for update using (has_vehicle_access(vehicle_id));
+create policy "phases delete" on phases for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own parts select" on parts;
 drop policy if exists "own parts insert" on parts;
 drop policy if exists "own parts update" on parts;
 drop policy if exists "own parts delete" on parts;
-create policy "own parts select" on parts for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own parts insert" on parts for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own parts update" on parts for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own parts delete" on parts for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "parts select" on parts for select using (has_vehicle_access(vehicle_id));
+create policy "parts insert" on parts for insert with check (has_vehicle_access(vehicle_id));
+create policy "parts update" on parts for update using (has_vehicle_access(vehicle_id));
+create policy "parts delete" on parts for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own labor select" on labor;
 drop policy if exists "own labor insert" on labor;
 drop policy if exists "own labor update" on labor;
 drop policy if exists "own labor delete" on labor;
-create policy "own labor select" on labor for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own labor insert" on labor for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own labor update" on labor for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own labor delete" on labor for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "labor select" on labor for select using (has_vehicle_access(vehicle_id));
+create policy "labor insert" on labor for insert with check (has_vehicle_access(vehicle_id));
+create policy "labor update" on labor for update using (has_vehicle_access(vehicle_id));
+create policy "labor delete" on labor for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own credits select" on credits;
 drop policy if exists "own credits insert" on credits;
 drop policy if exists "own credits update" on credits;
 drop policy if exists "own credits delete" on credits;
-create policy "own credits select" on credits for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own credits insert" on credits for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own credits update" on credits for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own credits delete" on credits for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "credits select" on credits for select using (has_vehicle_access(vehicle_id));
+create policy "credits insert" on credits for insert with check (has_vehicle_access(vehicle_id));
+create policy "credits update" on credits for update using (has_vehicle_access(vehicle_id));
+create policy "credits delete" on credits for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own journal select" on journal_entries;
 drop policy if exists "own journal insert" on journal_entries;
 drop policy if exists "own journal update" on journal_entries;
 drop policy if exists "own journal delete" on journal_entries;
-create policy "own journal select" on journal_entries for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own journal insert" on journal_entries for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own journal update" on journal_entries for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own journal delete" on journal_entries for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "journal select" on journal_entries for select using (has_vehicle_access(vehicle_id));
+create policy "journal insert" on journal_entries for insert with check (has_vehicle_access(vehicle_id));
+create policy "journal update" on journal_entries for update using (has_vehicle_access(vehicle_id));
+create policy "journal delete" on journal_entries for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own checklist select" on checklist_items;
 drop policy if exists "own checklist insert" on checklist_items;
 drop policy if exists "own checklist update" on checklist_items;
 drop policy if exists "own checklist delete" on checklist_items;
-create policy "own checklist select" on checklist_items for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own checklist insert" on checklist_items for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own checklist update" on checklist_items for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own checklist delete" on checklist_items for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "checklist select" on checklist_items for select using (has_vehicle_access(vehicle_id));
+create policy "checklist insert" on checklist_items for insert with check (has_vehicle_access(vehicle_id));
+create policy "checklist update" on checklist_items for update using (has_vehicle_access(vehicle_id));
+create policy "checklist delete" on checklist_items for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own favorites select" on favorite_parts;
 drop policy if exists "own favorites insert" on favorite_parts;
 drop policy if exists "own favorites update" on favorite_parts;
 drop policy if exists "own favorites delete" on favorite_parts;
-create policy "own favorites select" on favorite_parts for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own favorites insert" on favorite_parts for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own favorites update" on favorite_parts for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own favorites delete" on favorite_parts for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "favorites select" on favorite_parts for select using (has_vehicle_access(vehicle_id));
+create policy "favorites insert" on favorite_parts for insert with check (has_vehicle_access(vehicle_id));
+create policy "favorites update" on favorite_parts for update using (has_vehicle_access(vehicle_id));
+create policy "favorites delete" on favorite_parts for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own maintenance select" on maintenance_items;
 drop policy if exists "own maintenance insert" on maintenance_items;
 drop policy if exists "own maintenance update" on maintenance_items;
 drop policy if exists "own maintenance delete" on maintenance_items;
-create policy "own maintenance select" on maintenance_items for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own maintenance insert" on maintenance_items for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own maintenance update" on maintenance_items for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own maintenance delete" on maintenance_items for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "maintenance select" on maintenance_items for select using (has_vehicle_access(vehicle_id));
+create policy "maintenance insert" on maintenance_items for insert with check (has_vehicle_access(vehicle_id));
+create policy "maintenance update" on maintenance_items for update using (has_vehicle_access(vehicle_id));
+create policy "maintenance delete" on maintenance_items for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own fuel select" on fuel_logs;
 drop policy if exists "own fuel insert" on fuel_logs;
 drop policy if exists "own fuel update" on fuel_logs;
 drop policy if exists "own fuel delete" on fuel_logs;
-create policy "own fuel select" on fuel_logs for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own fuel insert" on fuel_logs for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own fuel update" on fuel_logs for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own fuel delete" on fuel_logs for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "fuel select" on fuel_logs for select using (has_vehicle_access(vehicle_id));
+create policy "fuel insert" on fuel_logs for insert with check (has_vehicle_access(vehicle_id));
+create policy "fuel update" on fuel_logs for update using (has_vehicle_access(vehicle_id));
+create policy "fuel delete" on fuel_logs for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own notes select" on vehicle_notes;
 drop policy if exists "own notes insert" on vehicle_notes;
 drop policy if exists "own notes update" on vehicle_notes;
 drop policy if exists "own notes delete" on vehicle_notes;
-create policy "own notes select" on vehicle_notes for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own notes insert" on vehicle_notes for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own notes update" on vehicle_notes for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
-create policy "own notes delete" on vehicle_notes for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "notes select" on vehicle_notes for select using (has_vehicle_access(vehicle_id));
+create policy "notes insert" on vehicle_notes for insert with check (has_vehicle_access(vehicle_id));
+create policy "notes update" on vehicle_notes for update using (has_vehicle_access(vehicle_id));
+create policy "notes delete" on vehicle_notes for delete using (has_vehicle_access(vehicle_id));
 
 -- Storage bucket for part/journal photos. Private bucket; files are stored under
--- a path starting with the owning user's id, and the policies below only allow
--- a user to touch objects under their own folder.
+-- <uploader's user id>/<vehicle id>/<filename>. Access is based on whether you
+-- have access to that vehicle (owner or collaborator), not on whose folder it's
+-- physically under — so collaborators can see and add photos too.
 
 insert into storage.buckets (id, name, public) values ('vehicle-photos', 'vehicle-photos', false)
   on conflict (id) do nothing;
@@ -254,11 +293,11 @@ drop policy if exists "own photos select" on storage.objects;
 drop policy if exists "own photos insert" on storage.objects;
 drop policy if exists "own photos update" on storage.objects;
 drop policy if exists "own photos delete" on storage.objects;
-create policy "own photos select" on storage.objects for select
-  using (bucket_id = 'vehicle-photos' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "own photos insert" on storage.objects for insert
-  with check (bucket_id = 'vehicle-photos' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "own photos update" on storage.objects for update
-  using (bucket_id = 'vehicle-photos' and (storage.foldername(name))[1] = auth.uid()::text);
-create policy "own photos delete" on storage.objects for delete
-  using (bucket_id = 'vehicle-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "shared photos select" on storage.objects for select
+  using (bucket_id = 'vehicle-photos' and has_vehicle_access(((storage.foldername(name))[2])::uuid));
+create policy "shared photos insert" on storage.objects for insert
+  with check (bucket_id = 'vehicle-photos' and has_vehicle_access(((storage.foldername(name))[2])::uuid));
+create policy "shared photos update" on storage.objects for update
+  using (bucket_id = 'vehicle-photos' and has_vehicle_access(((storage.foldername(name))[2])::uuid));
+create policy "shared photos delete" on storage.objects for delete
+  using (bucket_id = 'vehicle-photos' and has_vehicle_access(((storage.foldername(name))[2])::uuid));
