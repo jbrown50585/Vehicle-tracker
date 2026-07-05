@@ -551,7 +551,7 @@ function render() {
   updateHeaderForAuth();
 
   if (!authReady) {
-    app.innerHTML = '<div class="loading-state">Loading…</div>';
+    app.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><div>Loading…</div></div>';
     return;
   }
   if (!currentUser) {
@@ -701,7 +701,7 @@ function renderHome() {
   const mineCard = document.createElement('div');
   mineCard.className = 'card';
   mineCard.innerHTML = `
-    <h3>Your projects</h3>
+    <h3>🚗 Your projects</h3>
     <div class="section-sub" style="margin-bottom:14px;">${ownVehicles.length} project${ownVehicles.length === 1 ? '' : 's'} you own</div>
     <div class="meter-remaining">${ownVehicles.length}</div>
   `;
@@ -711,7 +711,7 @@ function renderHome() {
   const sharedCard = document.createElement('div');
   sharedCard.className = 'card';
   sharedCard.innerHTML = `
-    <h3>Shared with you${sharedNewTotal > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${sharedNewTotal} new</span>` : ''}</h3>
+    <h3>🤝 Shared with you${sharedNewTotal > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${sharedNewTotal} new</span>` : ''}</h3>
     <div class="section-sub" style="margin-bottom:14px;">${sharedVehicles.length} project${sharedVehicles.length === 1 ? '' : 's'} shared with you</div>
     <div class="meter-remaining">${sharedVehicles.length}</div>
   `;
@@ -754,7 +754,7 @@ function renderCategoryScreen(ownership) {
   const projectCard = document.createElement('div');
   projectCard.className = 'card';
   projectCard.innerHTML = `
-    <h3>Restoration projects${projectNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${projectNew} new</span>` : ''}</h3>
+    <h3>🔧 Restoration projects${projectNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${projectNew} new</span>` : ''}</h3>
     <div class="section-sub" style="margin-bottom:14px;">${projectVehicles.length} project${projectVehicles.length === 1 ? '' : 's'}</div>
     <div class="meter-remaining">${projectVehicles.length}</div>
   `;
@@ -765,7 +765,7 @@ function renderCategoryScreen(ownership) {
   const maintCard = document.createElement('div');
   maintCard.className = 'card';
   maintCard.innerHTML = `
-    <h3>General maintenance${maintNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${maintNew} new</span>` : ''}</h3>
+    <h3>🛠️ General maintenance${maintNew > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${maintNew} new</span>` : ''}</h3>
     <div class="section-sub" style="margin-bottom:14px;">${maintenanceVehicles.length} vehicle${maintenanceVehicles.length === 1 ? '' : 's'}</div>
     <div class="meter-remaining">${maintenanceVehicles.length}</div>
   `;
