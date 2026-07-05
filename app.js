@@ -2219,7 +2219,12 @@ function openVehicleModal(existing) {
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
       const { data: vRow, error } = await supabase.from('vehicles').insert(fields).select().single();
-      if (error) { alert('Could not create project: ' + error.message); saveBtn.disabled = false; return; }
+      if (error) {
+        console.error('vehicle insert error', error);
+        alert('Could not create project: ' + error.message + (error.details ? '\nDetails: ' + error.details : '') + (error.hint ? '\nHint: ' + error.hint : '') + (error.code ? '\nCode: ' + error.code : ''));
+        saveBtn.disabled = false;
+        return;
+      }
       const { data: phRow, error: phErr } = await supabase.from('phases').insert({ vehicle_id: vRow.id, name: 'General', budget }).select().single();
       if (phErr) { alert('Could not create budget phase: ' + phErr.message); saveBtn.disabled = false; return; }
       let coverPath = null;
