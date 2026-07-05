@@ -77,6 +77,13 @@ create table if not exists journal_entries (
   created_at timestamptz not null default now()
 );
 
+create table if not exists vehicle_notes (
+  id uuid primary key default gen_random_uuid(),
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists fuel_logs (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
@@ -135,6 +142,7 @@ alter table checklist_items enable row level security;
 alter table favorite_parts enable row level security;
 alter table maintenance_items enable row level security;
 alter table fuel_logs enable row level security;
+alter table vehicle_notes enable row level security;
 
 drop policy if exists "own vehicles select" on vehicles;
 drop policy if exists "own vehicles insert" on vehicles;
@@ -225,6 +233,15 @@ create policy "own fuel select" on fuel_logs for select using (vehicle_id in (se
 create policy "own fuel insert" on fuel_logs for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own fuel update" on fuel_logs for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "own fuel delete" on fuel_logs for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+
+drop policy if exists "own notes select" on vehicle_notes;
+drop policy if exists "own notes insert" on vehicle_notes;
+drop policy if exists "own notes update" on vehicle_notes;
+drop policy if exists "own notes delete" on vehicle_notes;
+create policy "own notes select" on vehicle_notes for select using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own notes insert" on vehicle_notes for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own notes update" on vehicle_notes for update using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
+create policy "own notes delete" on vehicle_notes for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
 -- Storage bucket for part/journal photos. Private bucket; files are stored under
 -- a path starting with the owning user's id, and the policies below only allow

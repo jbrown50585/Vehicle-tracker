@@ -89,8 +89,8 @@ let currentView = { screen: 'list', vehicleId: null, tab: 'budget' };
 // /vehicle/:id/parts             -> Parts tab
 // /vehicle/:id/buildlog          -> Build log tab
 
-const TAB_TO_SEGMENT = { budget: 'budget', parts: 'parts', journal: 'buildlog' };
-const SEGMENT_TO_TAB = { budget: 'budget', parts: 'parts', buildlog: 'journal' };
+const TAB_TO_SEGMENT = { budget: 'budget', parts: 'parts', journal: 'buildlog', notes: 'notes' };
+const SEGMENT_TO_TAB = { budget: 'budget', parts: 'parts', buildlog: 'journal', notes: 'notes' };
 
 function parseRoute() {
   const segments = window.location.pathname.split('/').filter(Boolean);
@@ -147,7 +147,7 @@ function dbVehicleToLocal(row) {
     vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
     purchasePrice: row.purchase_price != null ? Number(row.purchase_price) : null,
     salePrice: row.sale_price != null ? Number(row.sale_price) : null,
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [],
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [],
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -226,9 +226,12 @@ function dbMaintenanceToLocal(row) {
 function dbFuelToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, date: row.date, mileage: row.mileage, gallons: Number(row.gallons), totalCost: Number(row.total_cost), fullTank: row.full_tank, notes: row.notes };
 }
+function dbNoteToLocal(row) {
+  return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at };
+}
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -239,6 +242,7 @@ async function loadAllData() {
     supabase.from('favorite_parts').select('*'),
     supabase.from('maintenance_items').select('*'),
     supabase.from('fuel_logs').select('*'),
+    supabase.from('vehicle_notes').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -251,6 +255,7 @@ async function loadAllData() {
     v.favorites = (favoritesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFavoriteToLocal);
     v.maintenance = (maintenanceRes.data || []).filter(r => r.vehicle_id === v.id).map(dbMaintenanceToLocal);
     v.fuel = (fuelRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFuelToLocal);
+    v.notes = (notesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbNoteToLocal);
   });
   data = { vehicles };
 }
@@ -655,7 +660,7 @@ function renderDetail(vehicleId) {
 
   const tabs = document.createElement('div');
   tabs.className = 'tabs';
-  [['budget', 'Budget'], ['parts', 'Parts'], ['journal', 'Build log']].forEach(([key, label]) => {
+  [['budget', 'Budget'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']].forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (currentView.tab === key ? ' active' : '');
     btn.textContent = label;
@@ -666,6 +671,7 @@ function renderDetail(vehicleId) {
 
   if (currentView.tab === 'budget') wrap.appendChild(renderBudgetTab(v));
   else if (currentView.tab === 'parts') wrap.appendChild(renderPartsTab(v));
+  else if (currentView.tab === 'notes') wrap.appendChild(renderNotesTab(v));
   else wrap.appendChild(renderJournalTab(v));
 
   return wrap;
@@ -1627,6 +1633,131 @@ function openFuelModal(v, existing) {
     backdrop.remove();
     render();
   });
+}
+
+// --- Voice-to-text ---
+
+function attachSpeechToText(textareaEl, micBtn, statusEl) {
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognitionCtor) {
+    micBtn.disabled = true;
+    micBtn.title = 'Voice input is not supported in this browser';
+    if (statusEl) statusEl.textContent = 'Voice input not supported in this browser (try Chrome or Edge).';
+    return;
+  }
+  const recognition = new SpeechRecognitionCtor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+  let listening = false;
+  let baseText = '';
+
+  recognition.addEventListener('result', (e) => {
+    let interim = '';
+    let final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const transcript = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += transcript;
+      else interim += transcript;
+    }
+    if (final) baseText = (baseText + ' ' + final).trim();
+    textareaEl.value = (baseText + ' ' + interim).trim();
+  });
+  recognition.addEventListener('error', (e) => {
+    listening = false;
+    micBtn.textContent = '🎤 Start voice input';
+    micBtn.classList.remove('primary');
+    if (statusEl) statusEl.textContent = e.error === 'not-allowed' ? 'Microphone permission denied.' : `Voice input error: ${e.error}`;
+  });
+  recognition.addEventListener('end', () => { if (listening) recognition.start(); });
+
+  micBtn.addEventListener('click', () => {
+    if (!listening) {
+      baseText = textareaEl.value;
+      listening = true;
+      recognition.start();
+      micBtn.textContent = '⏹ Stop dictation';
+      micBtn.classList.add('primary');
+      if (statusEl) statusEl.textContent = 'Listening…';
+    } else {
+      listening = false;
+      recognition.stop();
+      micBtn.textContent = '🎤 Start voice input';
+      micBtn.classList.remove('primary');
+      if (statusEl) statusEl.textContent = '';
+    }
+  });
+}
+
+// --- Notes ---
+
+function renderNotesTab(v) {
+  const wrap = document.createElement('div');
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  header.innerHTML = `<h3>Notes</h3><span class="section-sub">Quick freeform notes — dictate with your voice or type</span>`;
+  wrap.appendChild(header);
+
+  const composer = document.createElement('div');
+  composer.className = 'summary-panel';
+  composer.style.marginBottom = '20px';
+  composer.innerHTML = `
+    <textarea id="note-text" placeholder="Type or dictate a note…" style="width:100%; min-height:80px; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--page); color:var(--text-primary); font-family:inherit; font-size:14px; resize:vertical;"></textarea>
+    <div class="field-row" style="margin-top:10px; align-items:center;">
+      <button type="button" id="note-mic" class="small">🎤 Start voice input</button>
+      <span class="section-sub" id="note-mic-status"></span>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="note-save">Add note</button>
+    </div>
+  `;
+  wrap.appendChild(composer);
+
+  const textarea = composer.querySelector('#note-text');
+  const micBtn = composer.querySelector('#note-mic');
+  const micStatus = composer.querySelector('#note-mic-status');
+  attachSpeechToText(textarea, micBtn, micStatus);
+
+  composer.querySelector('#note-save').addEventListener('click', async () => {
+    const text = textarea.value.trim();
+    if (!text) { alert('Enter or dictate a note first.'); return; }
+    const { data: row, error } = await supabase.from('vehicle_notes').insert({ vehicle_id: v.id, text }).select().single();
+    if (error) { alert('Could not save note: ' + error.message); return; }
+    v.notes.push(dbNoteToLocal(row));
+    render();
+  });
+
+  if (v.notes.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No notes yet.';
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'journal-list';
+  v.notes.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).forEach(note => {
+    const card = document.createElement('div');
+    card.className = 'journal-entry';
+    card.innerHTML = `<div class="date">${new Date(note.createdAt).toLocaleString()}</div><div class="text">${escapeHtml(note.text)}</div>`;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'small danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => deleteNote(v, note));
+    card.appendChild(delBtn);
+    list.appendChild(card);
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
+async function deleteNote(v, note) {
+  if (!confirm('Delete this note?')) return;
+  const { error } = await supabase.from('vehicle_notes').delete().eq('id', note.id);
+  if (error) { alert('Could not delete: ' + error.message); return; }
+  v.notes = v.notes.filter(x => x.id !== note.id);
+  render();
 }
 
 function renderJournalTab(v) {
