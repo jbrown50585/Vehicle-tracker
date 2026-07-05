@@ -571,7 +571,19 @@ function updateHeaderForAuth() {
   document.getElementById('signedInBar').style.display = signedIn ? 'inline-flex' : 'none';
   document.getElementById('newVehicleBtn').style.display = signedIn ? '' : 'none';
   document.getElementById('exportBtn').style.display = signedIn ? '' : 'none';
+  document.getElementById('headerNav').style.display = signedIn ? 'flex' : 'none';
   if (signedIn) document.getElementById('userEmail').textContent = currentUser.email;
+
+  const projectsBtn = document.getElementById('navProjectsBtn');
+  const sharedBtn = document.getElementById('navSharedBtn');
+  if (signedIn) {
+    const isMineView = currentView.ownership === 'mine';
+    const isSharedView = currentView.ownership === 'shared';
+    projectsBtn.className = isMineView ? 'active' : '';
+    sharedBtn.className = isSharedView ? 'active' : '';
+    const sharedNewTotal = ownershipVehicles('shared').reduce((s, v) => s + totalNewActivity(v), 0);
+    sharedBtn.innerHTML = `Shared${sharedNewTotal > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${sharedNewTotal}</span>` : ''}`;
+  }
 }
 
 // --- Auth screen ---
@@ -2855,6 +2867,9 @@ function openJournalModal(v, existing) {
 
 document.getElementById('newVehicleBtn').addEventListener('click', () => openVehicleModal());
 document.getElementById('signOutBtn').addEventListener('click', () => supabase.auth.signOut());
+document.getElementById('headerBrand').addEventListener('click', () => navigate({ screen: 'home' }));
+document.getElementById('navProjectsBtn').addEventListener('click', () => navigate({ screen: 'category', ownership: 'mine' }));
+document.getElementById('navSharedBtn').addEventListener('click', () => navigate({ screen: 'category', ownership: 'shared' }));
 document.getElementById('exportBtn').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
