@@ -19,6 +19,7 @@ create table if not exists vehicles (
   current_mileage int,
   purchase_price numeric,
   sale_price numeric,
+  owner_email text,
   created_at timestamptz not null default now()
 );
 alter table vehicles add column if not exists cover_photo_path text;
@@ -26,6 +27,8 @@ alter table vehicles add column if not exists vehicle_type text not null default
 alter table vehicles add column if not exists current_mileage int;
 alter table vehicles add column if not exists purchase_price numeric;
 alter table vehicles add column if not exists sale_price numeric;
+alter table vehicles add column if not exists owner_email text;
+update vehicles set owner_email = (select email from auth.users where id = vehicles.user_id) where owner_email is null;
 
 create table if not exists phases (
   id uuid primary key default gen_random_uuid(),

@@ -147,7 +147,7 @@ function dbVehicleToLocal(row) {
     vehicleType: row.vehicle_type || 'project', currentMileage: row.current_mileage,
     purchasePrice: row.purchase_price != null ? Number(row.purchase_price) : null,
     salePrice: row.sale_price != null ? Number(row.sale_price) : null,
-    ownerId: row.user_id,
+    ownerId: row.user_id, ownerEmail: row.owner_email,
     phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [], collaborators: [],
   };
 }
@@ -741,14 +741,16 @@ function openCollaboratorsModal(v, isOwner) {
 
   function renderList() {
     const listEl = modal.querySelector('#collab-list');
-    if (v.collaborators.length === 0) {
-      listEl.innerHTML = '<div class="section-sub">No collaborators yet.</div>';
-      return;
-    }
     listEl.innerHTML = '';
     const table = document.createElement('table');
     table.innerHTML = '<tbody></tbody>';
     const tbody = table.querySelector('tbody');
+
+    const ownerTr = document.createElement('tr');
+    const ownerLabel = v.ownerId === currentUser.id ? `${currentUser.email} (you)` : (v.ownerEmail || 'Project owner');
+    ownerTr.innerHTML = `<td>${escapeHtml(ownerLabel)}</td><td class="section-sub">Owner</td><td></td>`;
+    tbody.appendChild(ownerTr);
+
     v.collaborators.forEach(c => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(contactLabelFor(c.email))}</td><td class="section-sub">${formatDate(c.createdAt ? c.createdAt.slice(0, 10) : '')}</td><td class="row-actions"></td>`;
@@ -2258,7 +2260,7 @@ function openVehicleModal(existing) {
       Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
       const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
-      const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id }).select().single();
+      const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id, owner_email: currentUser.email }).select().single();
       if (error) {
         console.error('vehicle insert error', error);
         alert('Could not create project: ' + error.message + (error.details ? '\nDetails: ' + error.details : '') + (error.hint ? '\nHint: ' + error.hint : ''));
