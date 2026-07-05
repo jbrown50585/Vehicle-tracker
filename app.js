@@ -844,15 +844,30 @@ function renderDetail(vehicleId) {
   const activity = newActivityCounts(v);
   const activityTotal = activity.parts + activity.journal + activity.notes + activity.fuel;
   if (activityTotal > 0) {
-    const parts = [];
-    if (activity.parts) parts.push(`${activity.parts} new part${activity.parts === 1 ? '' : 's'}`);
-    if (activity.journal) parts.push(`${activity.journal} new build log entr${activity.journal === 1 ? 'y' : 'ies'}`);
-    if (activity.notes) parts.push(`${activity.notes} new note${activity.notes === 1 ? '' : 's'}`);
-    if (activity.fuel) parts.push(`${activity.fuel} new fuel log${activity.fuel === 1 ? '' : 's'}`);
     const banner = document.createElement('div');
     banner.className = 'summary-panel';
     banner.style.marginBottom = '16px';
-    banner.innerHTML = `<div class="status-label"><span class="status-dot" style="background:var(--series-1)"></span><strong>What's new:</strong>&nbsp;${parts.join(', ')} since your last visit.</div>`;
+    const label = document.createElement('div');
+    label.className = 'status-label';
+    label.innerHTML = `<span class="status-dot" style="background:var(--series-1)"></span><strong>What's new since your last visit:</strong>`;
+    banner.appendChild(label);
+
+    const pillRow = document.createElement('div');
+    pillRow.className = 'field-row';
+    pillRow.style.marginTop = '8px';
+    const addPill = (count, singular, plural, tab) => {
+      if (!count) return;
+      const pill = document.createElement('button');
+      pill.className = 'small primary';
+      pill.textContent = `${count} new ${count === 1 ? singular : plural}`;
+      pill.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab }));
+      pillRow.appendChild(pill);
+    };
+    addPill(activity.parts, 'part', 'parts', 'parts');
+    addPill(activity.journal, 'build log entry', 'build log entries', 'journal');
+    addPill(activity.notes, 'note', 'notes', 'notes');
+    addPill(activity.fuel, 'fuel log', 'fuel logs', 'journal');
+    banner.appendChild(pillRow);
     wrap.appendChild(banner);
   }
   markVehicleVisited(v);
