@@ -872,7 +872,10 @@ function renderDetail(vehicleId) {
       const pill = document.createElement('button');
       pill.className = 'small primary';
       pill.textContent = `${count} new ${count === 1 ? singular : plural}`;
-      pill.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab }));
+      pill.addEventListener('click', () => {
+        v.lastViewedAt = new Date().toISOString();
+        navigate({ screen: 'detail', vehicleId: v.id, tab });
+      });
       pillRow.appendChild(pill);
     };
     addPill(activity.parts, 'part', 'parts', 'parts');
