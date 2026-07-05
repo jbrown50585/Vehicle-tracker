@@ -572,6 +572,7 @@ function updateHeaderForAuth() {
   document.getElementById('newVehicleBtn').style.display = signedIn ? '' : 'none';
   document.getElementById('exportBtn').style.display = signedIn ? '' : 'none';
   document.getElementById('headerNav').style.display = signedIn ? 'flex' : 'none';
+  document.getElementById('headerSearchWrap').style.display = signedIn ? 'block' : 'none';
   if (signedIn) document.getElementById('userEmail').textContent = currentUser.email;
 
   const projectsBtn = document.getElementById('navProjectsBtn');
@@ -2873,6 +2874,56 @@ document.getElementById('signOutBtn').addEventListener('click', () => supabase.a
 document.getElementById('headerBrand').addEventListener('click', () => navigate({ screen: 'home' }));
 document.getElementById('navProjectsBtn').addEventListener('click', () => navigate({ screen: 'category', ownership: 'mine' }));
 document.getElementById('navSharedBtn').addEventListener('click', () => navigate({ screen: 'category', ownership: 'shared' }));
+
+// --- Header search ---
+
+function vehicleSearchText(v) {
+  return [v.year, v.make, v.model, v.trim, v.vin].filter(Boolean).join(' ').toLowerCase();
+}
+
+const searchInput = document.getElementById('headerSearch');
+const searchResults = document.getElementById('headerSearchResults');
+
+function closeSearchResults() {
+  searchResults.classList.remove('open');
+  searchResults.innerHTML = '';
+}
+
+searchInput.addEventListener('input', () => {
+  const query = searchInput.value.trim().toLowerCase();
+  if (!query) { closeSearchResults(); return; }
+
+  const matches = data.vehicles.filter(v => vehicleSearchText(v).includes(query)).slice(0, 12);
+  searchResults.innerHTML = '';
+  if (matches.length === 0) {
+    searchResults.innerHTML = '<div class="search-result-empty">No projects match that search.</div>';
+  } else {
+    matches.forEach(v => {
+      const row = document.createElement('div');
+      row.className = 'search-result';
+      const isOwner = v.ownerId === currentUser.id;
+      row.innerHTML = `
+        <span>${escapeHtml(`${v.year} ${v.make} ${v.model}${v.trim ? ' ' + v.trim : ''}`)}</span>
+        <span class="chip">${isOwner ? 'Yours' : 'Shared'}</span>
+      `;
+      row.addEventListener('click', () => {
+        searchInput.value = '';
+        closeSearchResults();
+        navigate({ screen: 'detail', vehicleId: v.id, tab: 'budget' });
+      });
+      searchResults.appendChild(row);
+    });
+  }
+  searchResults.classList.add('open');
+});
+
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { searchInput.value = ''; closeSearchResults(); searchInput.blur(); }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#headerSearchWrap')) closeSearchResults();
+});
 document.getElementById('exportBtn').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
