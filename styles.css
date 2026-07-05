@@ -1,12 +1,12 @@
 :root {
-  --surface-1:      #fcfcfb;
-  --page:           #f9f9f7;
-  --text-primary:   #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted:     #898781;
-  --gridline:       #e1e0d9;
-  --border:         rgba(11,11,11,0.10);
-  --series-1:       #C41E3A;
+  --surface-1:      #ffffff;
+  --page:           #f4f6f8;
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #64748b;
+  --gridline:       #e2e8f0;
+  --border:         rgba(15,23,42,0.10);
+  --series-1:       #2A5F9E;
   --good:           #0ca30c;
   --warning:        #fab219;
   --serious:        #ec835a;
@@ -14,14 +14,14 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface-1:      #1a1a19;
-    --page:           #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --gridline:       #2c2c2a;
+    --surface-1:      #161b22;
+    --page:           #0d1117;
+    --text-primary:   #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted:     #94a3b8;
+    --gridline:       #263041;
     --border:         rgba(255,255,255,0.10);
-    --series-1:       #D2334F;
+    --series-1:       #3F72A8;
     --good:           #0ca30c;
     --warning:        #fab219;
     --serious:        #ec835a;
@@ -58,7 +58,7 @@ header {
   border-bottom: 1px solid rgba(255,255,255,0.08);
   flex-wrap: wrap;
   gap: 12px;
-  background: #111113;
+  background: #10141b;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
   position: sticky;
   top: 0;
@@ -327,7 +327,7 @@ footer { text-align: center; color: var(--text-muted); font-size: 12px; padding:
   justify-content: center;
   gap: 14px;
   padding: 48px 56px;
-  background: radial-gradient(circle at 20% 20%, #3a0d14 0%, #0a0a0b 62%), linear-gradient(160deg, #C41E3A 0%, #111113 55%);
+  background: radial-gradient(circle at 20% 20%, #1c3a52 0%, #0a0e14 62%), linear-gradient(160deg, #2A5F9E 0%, #10141b 55%);
   color: #fff;
 }
 .auth-hero-icon { width: 64px; height: 64px; border-radius: 16px; margin-bottom: 6px; }
