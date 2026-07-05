@@ -183,7 +183,19 @@ drop policy if exists "vehicles update" on vehicles;
 drop policy if exists "vehicles delete" on vehicles;
 -- Owner or collaborator can view; only the owner can rename/delete the vehicle
 -- itself (collaborators get full access to everything they work on inside it).
-create policy "vehicles select" on vehicles for select using (has_vehicle_access(id));
+-- NOTE: this policy checks ownership/collaboration directly instead of calling
+-- has_vehicle_access(), because that function itself queries vehicles — going
+-- through it here would make the policy check its own table circularly, which
+-- Postgres resolves as "no access" instead of erroring. Child tables (parts,
+-- phases, etc.) don't have this problem, since for them has_vehicle_access()
+-- queries a *different* table (vehicles) than the one the policy is on.
+create policy "vehicles select" on vehicles for select using (
+  user_id = auth.uid()
+  or exists (
+    select 1 from vehicle_collaborators
+    where vehicle_id = vehicles.id and lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  )
+);
 create policy "vehicles insert" on vehicles for insert with check (user_id = auth.uid());
 create policy "vehicles update" on vehicles for update using (user_id = auth.uid());
 create policy "vehicles delete" on vehicles for delete using (user_id = auth.uid());
