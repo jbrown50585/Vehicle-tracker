@@ -84,7 +84,19 @@ create table if not exists vehicle_notes (
   id uuid primary key default gen_random_uuid(),
   vehicle_id uuid not null references vehicles(id) on delete cascade,
   text text not null,
+  created_by uuid references auth.users(id),
+  author_email text,
   created_at timestamptz not null default now()
+);
+alter table vehicle_notes add column if not exists created_by uuid references auth.users(id);
+alter table vehicle_notes add column if not exists author_email text;
+
+create table if not exists vehicle_views (
+  id uuid primary key default gen_random_uuid(),
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  last_viewed_at timestamptz not null default now(),
+  unique (vehicle_id, user_id)
 );
 
 create table if not exists fuel_logs (
@@ -193,6 +205,14 @@ alter table favorite_parts enable row level security;
 alter table maintenance_items enable row level security;
 alter table fuel_logs enable row level security;
 alter table vehicle_notes enable row level security;
+alter table vehicle_views enable row level security;
+
+drop policy if exists "own views select" on vehicle_views;
+drop policy if exists "own views insert" on vehicle_views;
+drop policy if exists "own views update" on vehicle_views;
+create policy "own views select" on vehicle_views for select using (user_id = auth.uid());
+create policy "own views insert" on vehicle_views for insert with check (user_id = auth.uid() and has_vehicle_access(vehicle_id));
+create policy "own views update" on vehicle_views for update using (user_id = auth.uid());
 
 drop policy if exists "own vehicles select" on vehicles;
 drop policy if exists "own vehicles insert" on vehicles;

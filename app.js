@@ -148,7 +148,7 @@ function dbVehicleToLocal(row) {
     purchasePrice: row.purchase_price != null ? Number(row.purchase_price) : null,
     salePrice: row.sale_price != null ? Number(row.sale_price) : null,
     ownerId: row.user_id, ownerEmail: row.owner_email,
-    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [], collaborators: [],
+    phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [], collaborators: [], lastViewedAt: null,
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -156,7 +156,7 @@ function dbPartToLocal(row) {
   return {
     id: row.id, vehicleId: row.vehicle_id, phaseId: row.phase_id, name: row.name, category: row.category,
     cost: Number(row.cost), status: row.status, vendor: row.vendor, notes: row.notes, photo: row.photo_path,
-    partNumber: row.part_number,
+    partNumber: row.part_number, createdAt: row.created_at,
   };
 }
 
@@ -209,7 +209,7 @@ function dbLaborToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, date: row.date, description: row.description, hours: Number(row.hours), paid: row.paid, amount: Number(row.amount) };
 }
 function dbCreditToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, date: row.date, amount: Number(row.amount), reason: row.reason }; }
-function dbJournalToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, date: row.date, text: row.text, photos: row.photo_paths || [] }; }
+function dbJournalToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, date: row.date, text: row.text, photos: row.photo_paths || [], createdAt: row.created_at }; }
 function dbChecklistToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, category: row.category, task: row.task, done: row.done, doneDate: row.done_date, position: row.position };
 }
@@ -225,10 +225,10 @@ function dbMaintenanceToLocal(row) {
 }
 
 function dbFuelToLocal(row) {
-  return { id: row.id, vehicleId: row.vehicle_id, date: row.date, mileage: row.mileage, gallons: Number(row.gallons), totalCost: Number(row.total_cost), fullTank: row.full_tank, notes: row.notes };
+  return { id: row.id, vehicleId: row.vehicle_id, date: row.date, mileage: row.mileage, gallons: Number(row.gallons), totalCost: Number(row.total_cost), fullTank: row.full_tank, notes: row.notes, createdAt: row.created_at };
 }
 function dbNoteToLocal(row) {
-  return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at };
+  return { id: row.id, vehicleId: row.vehicle_id, text: row.text, createdAt: row.created_at, authorEmail: row.author_email };
 }
 function dbCollaboratorToLocal(row) {
   return { id: row.id, vehicleId: row.vehicle_id, email: row.email, createdAt: row.created_at };
@@ -238,7 +238,7 @@ function dbContactToLocal(row) {
 }
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes, contactsRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes, contactsRes, viewsRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -252,6 +252,7 @@ async function loadAllData() {
     supabase.from('vehicle_notes').select('*'),
     supabase.from('vehicle_collaborators').select('*'),
     supabase.from('known_collaborators').select('*').order('nickname'),
+    supabase.from('vehicle_views').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -266,8 +267,37 @@ async function loadAllData() {
     v.fuel = (fuelRes.data || []).filter(r => r.vehicle_id === v.id).map(dbFuelToLocal);
     v.notes = (notesRes.data || []).filter(r => r.vehicle_id === v.id).map(dbNoteToLocal);
     v.collaborators = (collabRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCollaboratorToLocal);
+    const viewRow = (viewsRes.data || []).find(r => r.vehicle_id === v.id);
+    v.lastViewedAt = viewRow ? viewRow.last_viewed_at : null;
   });
   data = { vehicles, contacts: (contactsRes.data || []).map(dbContactToLocal) };
+}
+
+// --- Shared project activity ---
+
+function newActivityCounts(v) {
+  const since = v.lastViewedAt || '1970-01-01T00:00:00Z';
+  const countNew = (list) => list.filter(item => item.createdAt && item.createdAt > since).length;
+  return {
+    parts: countNew(v.parts),
+    journal: countNew(v.journal),
+    notes: countNew(v.notes),
+    fuel: countNew(v.fuel),
+  };
+}
+function totalNewActivity(v) {
+  const c = newActivityCounts(v);
+  return c.parts + c.journal + c.notes + c.fuel;
+}
+
+const visitedThisSession = new Set();
+async function markVehicleVisited(v) {
+  if (visitedThisSession.has(v.id)) return;
+  visitedThisSession.add(v.id);
+  await supabase.from('vehicle_views').upsert(
+    { vehicle_id: v.id, user_id: currentUser.id, last_viewed_at: new Date().toISOString() },
+    { onConflict: 'vehicle_id,user_id' }
+  );
 }
 
 // --- Fuel log / MPG ---
@@ -596,40 +626,67 @@ async function handleAuthSubmit(isSignUp) {
 
 // --- Vehicle list ---
 
+function renderVehicleCard(v) {
+  const budget = totalBudget(v);
+  const spent = totalSpent(v);
+  const remaining = remainingBudget(v);
+  const pctUsed = budget > 0 ? Math.min(100, Math.max(0, (spent / budget) * 100)) : 0;
+  const status = budgetStatus(remaining, budget);
+  const alertCount = maintenanceAlertCount(v);
+  const newCount = totalNewActivity(v);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
+    <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
+    <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${v.ownerId !== currentUser.id ? ' <span class="chip">Shared</span>' : ''}${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}${newCount > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${newCount} new</span>` : ''}</div>
+    <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
+    <div class="meter-row">
+      <span class="meter-remaining">${money(remaining)}</span>
+      <span class="meter-total">remaining of ${money(budget)}</span>
+    </div>
+    <div class="meter-track"><div class="meter-fill" style="width:${pctUsed}%; background:${status.color}"></div></div>
+    <div class="status-label"><span class="status-dot" style="background:${status.color}"></span>${status.label} &middot; ${v.parts.length} part${v.parts.length === 1 ? '' : 's'}</div>
+  `;
+  card.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: 'budget' }));
+  return card;
+}
+
 function renderList() {
   const wrap = document.createElement('div');
   if (data.vehicles.length === 0) {
     wrap.innerHTML = '<div class="empty-state">No vehicle projects yet. Click "+ New Vehicle Project" to add your first one.</div>';
     return wrap;
   }
-  const grid = document.createElement('div');
-  grid.className = 'grid';
-  data.vehicles.forEach(v => {
-    const budget = totalBudget(v);
-    const spent = totalSpent(v);
-    const remaining = remainingBudget(v);
-    const pctUsed = budget > 0 ? Math.min(100, Math.max(0, (spent / budget) * 100)) : 0;
-    const status = budgetStatus(remaining, budget);
-    const alertCount = maintenanceAlertCount(v);
 
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `
-      ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
-      <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
-      <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${v.ownerId !== currentUser.id ? ' <span class="chip">Shared</span>' : ''}${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}</div>
-      <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
-      <div class="meter-row">
-        <span class="meter-remaining">${money(remaining)}</span>
-        <span class="meter-total">remaining of ${money(budget)}</span>
-      </div>
-      <div class="meter-track"><div class="meter-fill" style="width:${pctUsed}%; background:${status.color}"></div></div>
-      <div class="status-label"><span class="status-dot" style="background:${status.color}"></span>${status.label} &middot; ${v.parts.length} part${v.parts.length === 1 ? '' : 's'}</div>
-    `;
-    card.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: 'budget' }));
-    grid.appendChild(card);
-  });
-  wrap.appendChild(grid);
+  const ownVehicles = data.vehicles.filter(v => v.ownerId === currentUser.id);
+  const sharedVehicles = data.vehicles.filter(v => v.ownerId !== currentUser.id);
+
+  if (ownVehicles.length > 0) {
+    const header = document.createElement('div');
+    header.className = 'section-header';
+    header.innerHTML = `<h3>Your projects</h3>`;
+    wrap.appendChild(header);
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    ownVehicles.forEach(v => grid.appendChild(renderVehicleCard(v)));
+    wrap.appendChild(grid);
+  }
+
+  if (sharedVehicles.length > 0) {
+    const sharedNewTotal = sharedVehicles.reduce((s, v) => s + totalNewActivity(v), 0);
+    const header = document.createElement('div');
+    header.className = 'section-header';
+    header.style.marginTop = ownVehicles.length > 0 ? '24px' : '0';
+    header.innerHTML = `<h3>Shared with you</h3><span class="section-sub">${sharedNewTotal > 0 ? `🔔 ${sharedNewTotal} new since you last looked` : 'Projects other people have shared with you'}</span>`;
+    wrap.appendChild(header);
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    sharedVehicles.forEach(v => grid.appendChild(renderVehicleCard(v)));
+    wrap.appendChild(grid);
+  }
+
   return wrap;
 }
 
@@ -674,6 +731,22 @@ function renderDetail(vehicleId) {
   }
   header.appendChild(headerBtns);
   wrap.appendChild(header);
+
+  const activity = newActivityCounts(v);
+  const activityTotal = activity.parts + activity.journal + activity.notes + activity.fuel;
+  if (activityTotal > 0) {
+    const parts = [];
+    if (activity.parts) parts.push(`${activity.parts} new part${activity.parts === 1 ? '' : 's'}`);
+    if (activity.journal) parts.push(`${activity.journal} new build log entr${activity.journal === 1 ? 'y' : 'ies'}`);
+    if (activity.notes) parts.push(`${activity.notes} new note${activity.notes === 1 ? '' : 's'}`);
+    if (activity.fuel) parts.push(`${activity.fuel} new fuel log${activity.fuel === 1 ? '' : 's'}`);
+    const banner = document.createElement('div');
+    banner.className = 'summary-panel';
+    banner.style.marginBottom = '16px';
+    banner.innerHTML = `<div class="status-label"><span class="status-dot" style="background:var(--series-1)"></span><strong>What's new:</strong>&nbsp;${parts.join(', ')} since your last visit.</div>`;
+    wrap.appendChild(banner);
+  }
+  markVehicleVisited(v);
 
   const tabs = document.createElement('div');
   tabs.className = 'tabs';
@@ -1821,7 +1894,7 @@ function renderNotesTab(v) {
   const wrap = document.createElement('div');
   const header = document.createElement('div');
   header.className = 'section-header';
-  header.innerHTML = `<h3>Notes</h3><span class="section-sub">Quick freeform notes — dictate with your voice or type</span>`;
+  header.innerHTML = `<h3>Notes</h3><span class="section-sub">Back-and-forth notes with anyone sharing this project — dictate with your voice or type</span>`;
   wrap.appendChild(header);
 
   const composer = document.createElement('div');
@@ -1847,7 +1920,7 @@ function renderNotesTab(v) {
   composer.querySelector('#note-save').addEventListener('click', async () => {
     const text = textarea.value.trim();
     if (!text) { alert('Enter or dictate a note first.'); return; }
-    const { data: row, error } = await supabase.from('vehicle_notes').insert({ vehicle_id: v.id, text }).select().single();
+    const { data: row, error } = await supabase.from('vehicle_notes').insert({ vehicle_id: v.id, text, created_by: currentUser.id, author_email: currentUser.email }).select().single();
     if (error) { alert('Could not save note: ' + error.message); return; }
     v.notes.push(dbNoteToLocal(row));
     render();
@@ -1864,9 +1937,11 @@ function renderNotesTab(v) {
   const list = document.createElement('div');
   list.className = 'journal-list';
   v.notes.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).forEach(note => {
+    const isMine = note.authorEmail && currentUser.email && note.authorEmail.toLowerCase() === currentUser.email.toLowerCase();
+    const authorLabel = note.authorEmail ? contactLabelFor(note.authorEmail) : 'Unknown';
     const card = document.createElement('div');
     card.className = 'journal-entry';
-    card.innerHTML = `<div class="date">${new Date(note.createdAt).toLocaleString()}</div><div class="text">${escapeHtml(note.text)}</div>`;
+    card.innerHTML = `<div class="date"><strong>${escapeHtml(isMine ? 'You' : authorLabel)}</strong> &middot; ${new Date(note.createdAt).toLocaleString()}</div><div class="text">${escapeHtml(note.text)}</div>`;
     const delBtn = document.createElement('button');
     delBtn.className = 'small danger';
     delBtn.textContent = 'Delete';
