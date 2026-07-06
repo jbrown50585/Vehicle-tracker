@@ -205,7 +205,7 @@ async function openEbayModal(v, p) {
       row.rel = 'noopener';
       row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--gridline); text-decoration:none; color:inherit;';
       row.innerHTML = `
-        ${item.imageUrl ? `<img src="${item.imageUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex:none;">` : ''}
+        ${item.imageUrl ? `<img src="${escapeHtml(item.imageUrl)}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex:none;">` : ''}
         <div style="flex:1">
           <div style="font-size:13px">${escapeHtml(item.title)}</div>
           <div style="font-size:12px; color:var(--text-muted)">${item.condition ? escapeHtml(item.condition) + ' · ' : ''}${item.price ? escapeHtml(item.price) : ''}</div>
@@ -318,15 +318,26 @@ function computeFuelStats(v) {
   const sorted = v.fuel.slice().sort((a, b) => a.mileage - b.mileage);
   let totalDistance = 0;
   let totalGallons = 0;
-  const withMpg = sorted.map((entry, idx) => {
+  // MPG via the standard "fill-to-full" method: a partial fill-up between two
+  // full tanks doesn't get its own MPG, but its gallons still count toward the
+  // next full tank's total (since that's the fuel actually used for those miles).
+  let lastFullTankMileage = null;
+  let gallonsSinceLastFullTank = 0;
+
+  const withMpg = sorted.map((entry) => {
+    gallonsSinceLastFullTank += Number(entry.gallons) || 0;
     let mpg = null;
-    if (idx > 0 && entry.fullTank) {
-      const distance = entry.mileage - sorted[idx - 1].mileage;
-      if (distance > 0 && entry.gallons > 0) {
-        mpg = distance / entry.gallons;
-        totalDistance += distance;
-        totalGallons += entry.gallons;
+    if (entry.fullTank) {
+      if (lastFullTankMileage !== null) {
+        const distance = entry.mileage - lastFullTankMileage;
+        if (distance > 0 && gallonsSinceLastFullTank > 0) {
+          mpg = distance / gallonsSinceLastFullTank;
+          totalDistance += distance;
+          totalGallons += gallonsSinceLastFullTank;
+        }
       }
+      lastFullTankMileage = entry.mileage;
+      gallonsSinceLastFullTank = 0;
     }
     return { ...entry, mpg };
   });
@@ -909,10 +920,10 @@ function renderDetail(vehicleId) {
 
 async function deleteVehicle(v) {
   if (!confirm(`Delete "${v.year} ${v.make} ${v.model}" and everything in it? This cannot be undone.`)) return;
-  const photoPaths = [v.coverPhoto, ...v.parts.map(p => p.photo), ...v.journal.flatMap(j => j.photos)];
-  await deletePhotos(photoPaths);
   const { error } = await supabase.from('vehicles').delete().eq('id', v.id);
   if (error) { alert('Could not delete: ' + error.message); return; }
+  const photoPaths = [v.coverPhoto, ...v.parts.map(p => p.photo), ...v.journal.flatMap(j => j.photos)];
+  await deletePhotos(photoPaths);
   data.vehicles = data.vehicles.filter(x => x.id !== v.id);
   navigate({ screen: 'list', ownership: 'mine', vehicleType: v.vehicleType === 'maintenance' ? 'maintenance' : 'project', vehicleId: null, tab: 'budget' });
 }
@@ -1003,7 +1014,7 @@ function openCollaboratorsModal(v, isOwner) {
       if (!email || !email.includes('@')) { alert('Enter a valid email address.'); return; }
       const { data: row, error } = await supabase.from('vehicle_collaborators').insert({ vehicle_id: v.id, email }).select().single();
       if (error) {
-        alert(error.message.includes('duplicate') ? 'That person already has access.' : 'Could not invite: ' + error.message);
+        alert(error.code === '23505' ? 'That person already has access.' : 'Could not invite: ' + error.message);
         return;
       }
       v.collaborators.push(dbCollaboratorToLocal(row));
@@ -1215,6 +1226,7 @@ function renderBudgetTab(v) {
 
 async function deletePhase(v, ph) {
   const fallback = v.phases.find(p => p.id !== ph.id);
+  if (!fallback) { alert('Can\'t delete the only budget phase on a project.'); return; }
   if (!confirm(`Delete phase "${ph.name}"? Parts assigned to it will move to "${fallback.name}".`)) return;
   const affectedParts = v.parts.filter(p => p.phaseId === ph.id);
   if (affectedParts.length) {
@@ -1884,7 +1896,7 @@ function renderFuelSection(v) {
   entries.forEach(entry => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${formatDate(entry.date)}</td>
+      <td>${formatDate(entry.date)}${entry.notes ? `<div class="section-sub">${escapeHtml(entry.notes)}</div>` : ''}</td>
       <td>${entry.mileage.toLocaleString()}${entry.fullTank ? '' : ' <span class="section-sub">(partial)</span>'}</td>
       <td>${entry.gallons.toFixed(2)}</td>
       <td class="cost">${money(entry.totalCost)}</td>
@@ -1951,6 +1963,7 @@ function openFuelModal(v, existing) {
     const gallons = parseFloat(modal.querySelector('#fu-gallons').value);
     if (isNaN(mileage) || mileage < 0) { alert('Enter a valid odometer reading.'); return; }
     if (isNaN(gallons) || gallons <= 0) { alert('Enter a valid number of gallons.'); return; }
+    if (parseFloat(modal.querySelector('#fu-cost').value) < 0) { alert('Total cost can\'t be negative.'); return; }
     const fields = {
       date: modal.querySelector('#fu-date').value || null,
       mileage,
@@ -2415,8 +2428,12 @@ function openVehicleModal(existing) {
     }
     if (info.year) {
       const yearSelect = modal.querySelector('#f-year');
-      if (!yearSelect.querySelector(`option[value="${info.year}"]`)) {
-        yearSelect.insertAdjacentHTML('afterbegin', `<option value="${info.year}">${info.year}</option>`);
+      const alreadyListed = Array.from(yearSelect.options).some(opt => opt.value === info.year);
+      if (!alreadyListed) {
+        const opt = document.createElement('option');
+        opt.value = info.year;
+        opt.textContent = info.year;
+        yearSelect.insertBefore(opt, yearSelect.firstChild);
       }
       yearSelect.value = info.year;
     }
@@ -2523,7 +2540,12 @@ function openVehicleModal(existing) {
         return;
       }
       const { data: phRow, error: phErr } = await supabase.from('phases').insert({ vehicle_id: vRow.id, name: 'General', budget }).select().single();
-      if (phErr) { alert('Could not create budget phase: ' + phErr.message); saveBtn.disabled = false; return; }
+      if (phErr) {
+        alert('Could not create budget phase: ' + phErr.message + '\nRolling back the new vehicle so it doesn\'t get left in a broken state.');
+        await supabase.from('vehicles').delete().eq('id', vRow.id);
+        saveBtn.disabled = false;
+        return;
+      }
       let coverPath = null;
       if (photoState.blob) {
         coverPath = await uploadPhoto(vRow.id, photoState.blob);
@@ -2673,6 +2695,7 @@ function openPartModal(v, existing, presetCategory) {
   modal.querySelector('#p-save').addEventListener('click', async () => {
     const name = modal.querySelector('#p-name').value.trim();
     if (!name) { alert('Part name is required.'); return; }
+    if (parseFloat(modal.querySelector('#p-cost').value) < 0) { alert('Cost can\'t be negative.'); return; }
     const saveBtn = modal.querySelector('#p-save');
     saveBtn.disabled = true;
 
@@ -2734,6 +2757,7 @@ function openLaborModal(v, existing) {
   modal.querySelector('#l-cancel').addEventListener('click', () => backdrop.remove());
   modal.querySelector('#l-save').addEventListener('click', async () => {
     const paid = paidCheckbox.checked;
+    if (paid && parseFloat(modal.querySelector('#l-amount').value) < 0) { alert('Amount paid can\'t be negative.'); return; }
     const fields = {
       date: modal.querySelector('#l-date').value || null,
       description: modal.querySelector('#l-desc').value.trim(),

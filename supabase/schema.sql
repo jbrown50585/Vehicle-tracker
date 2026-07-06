@@ -246,7 +246,14 @@ create policy "vehicles delete" on vehicles for delete using (user_id = auth.uid
 drop policy if exists "collaborators select" on vehicle_collaborators;
 drop policy if exists "collaborators insert" on vehicle_collaborators;
 drop policy if exists "collaborators delete" on vehicle_collaborators;
-create policy "collaborators select" on vehicle_collaborators for select using (has_vehicle_access(vehicle_id));
+-- Inlined instead of calling has_vehicle_access(), same reason as the vehicles
+-- select policy: that function's collaborator-matching branch queries this
+-- exact table, so calling it from this table's own policy is circular and
+-- Postgres silently resolves it as "no access" for the collaborator branch.
+create policy "collaborators select" on vehicle_collaborators for select using (
+  vehicle_id in (select id from vehicles where user_id = auth.uid())
+  or lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+);
 create policy "collaborators insert" on vehicle_collaborators for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "collaborators delete" on vehicle_collaborators for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
