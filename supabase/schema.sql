@@ -179,12 +179,22 @@ create table if not exists vehicle_collaborators (
 -- email). has_vehicle_access() is the single source of truth for that check —
 -- every child table's policies call it instead of repeating the logic.
 
+-- row_security = off is the important part here, not just security definer:
+-- security definer only changes which role's *permissions* apply, it does not
+-- by itself guarantee RLS is skipped for this function's own queries. Without
+-- this, vehicles/vehicle_collaborators calling this function from their own
+-- select policies (see below) re-triggers RLS on the table being queried
+-- inside the function, which re-enters the caller's policy, and so on forever
+-- — Postgres eventually detects this as "infinite recursion detected in
+-- policy". row_security = off makes the queries inside this function ignore
+-- RLS entirely, so it can safely be called from both tables' own policies.
 create or replace function has_vehicle_access(vid uuid)
 returns boolean
 language sql
 stable
 security definer
 set search_path = public
+set row_security = off
 as $$
   select
     exists (select 1 from vehicles where id = vid and user_id = auth.uid())
@@ -226,19 +236,12 @@ drop policy if exists "vehicles update" on vehicles;
 drop policy if exists "vehicles delete" on vehicles;
 -- Owner or collaborator can view; only the owner can rename/delete the vehicle
 -- itself (collaborators get full access to everything they work on inside it).
--- NOTE: this policy checks ownership/collaboration directly instead of calling
--- has_vehicle_access(), because that function itself queries vehicles — going
--- through it here would make the policy check its own table circularly, which
--- Postgres resolves as "no access" instead of erroring. Child tables (parts,
--- phases, etc.) don't have this problem, since for them has_vehicle_access()
--- queries a *different* table (vehicles) than the one the policy is on.
-create policy "vehicles select" on vehicles for select using (
-  user_id = auth.uid()
-  or exists (
-    select 1 from vehicle_collaborators
-    where vehicle_id = vehicles.id and lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  )
-);
+-- Must go through has_vehicle_access() rather than a direct subquery on
+-- vehicle_collaborators here — a direct subquery re-triggers that table's own
+-- select policy, which (if it queries vehicles back) re-triggers this policy,
+-- looping forever. has_vehicle_access() runs with row_security off internally
+-- (see its definition above), so calling it here does not re-enter RLS.
+create policy "vehicles select" on vehicles for select using (has_vehicle_access(id));
 create policy "vehicles insert" on vehicles for insert with check (user_id = auth.uid());
 create policy "vehicles update" on vehicles for update using (user_id = auth.uid());
 create policy "vehicles delete" on vehicles for delete using (user_id = auth.uid());
@@ -246,14 +249,10 @@ create policy "vehicles delete" on vehicles for delete using (user_id = auth.uid
 drop policy if exists "collaborators select" on vehicle_collaborators;
 drop policy if exists "collaborators insert" on vehicle_collaborators;
 drop policy if exists "collaborators delete" on vehicle_collaborators;
--- Inlined instead of calling has_vehicle_access(), same reason as the vehicles
--- select policy: that function's collaborator-matching branch queries this
--- exact table, so calling it from this table's own policy is circular and
--- Postgres silently resolves it as "no access" for the collaborator branch.
-create policy "collaborators select" on vehicle_collaborators for select using (
-  vehicle_id in (select id from vehicles where user_id = auth.uid())
-  or lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-);
+-- Same reasoning as the vehicles select policy above: go through
+-- has_vehicle_access() rather than a direct subquery on vehicles, or the two
+-- tables' policies re-trigger each other forever.
+create policy "collaborators select" on vehicle_collaborators for select using (has_vehicle_access(vehicle_id));
 create policy "collaborators insert" on vehicle_collaborators for insert with check (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 create policy "collaborators delete" on vehicle_collaborators for delete using (vehicle_id in (select id from vehicles where user_id = auth.uid()));
 
