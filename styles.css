@@ -12,22 +12,6 @@
   --serious:        #ec835a;
   --critical:       #d03b3b;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface-1:      #161b22;
-    --page:           #0d1117;
-    --text-primary:   #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted:     #94a3b8;
-    --gridline:       #263041;
-    --border:         rgba(255,255,255,0.10);
-    --series-1:       #3F72A8;
-    --good:           #0ca30c;
-    --warning:        #fab219;
-    --serious:        #ec835a;
-    --critical:       #d03b3b;
-  }
-}
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -176,10 +160,6 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px; }
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 .card:hover { border-color: var(--series-1); box-shadow: 0 10px 28px rgba(0,0,0,0.10); transform: translateY(-2px); }
-@media (prefers-color-scheme: dark) {
-  .card { box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
-  .card:hover { box-shadow: 0 10px 28px rgba(0,0,0,0.4); }
-}
 .card-cover { width: 100%; height: 140px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; background: var(--gridline); }
 .detail-cover { width: 96px; height: 96px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); background: var(--gridline); }
 .card h3 { margin: 0 0 2px 0; font-size: 16px; }
