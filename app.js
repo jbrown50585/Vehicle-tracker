@@ -30,13 +30,6 @@ const MAKES = [
 const OTHER_VALUE = '__other__';
 const CURRENT_YEAR = new Date().getFullYear();
 
-const TRIM_PRESETS = [
-  'Base', 'S', 'SV', 'SL', 'SR', 'SR5', 'LE', 'SE', 'SEL', 'LX', 'EX', 'EX-L',
-  'GLS', 'GT', 'GTS', 'GLI', 'Si', 'RS', 'SS', 'LT', 'LTZ', 'Sport', 'Touring',
-  'Limited', 'Premium', 'Platinum', 'Denali', 'XLT', 'Lariat', 'King Ranch',
-  'TRD Sport', 'TRD Off-Road', 'TRD Pro', 'R-Line', 'Type R',
-].sort();
-
 function cleanVinValue(v) {
   if (!v) return null;
   const trimmed = String(v).trim();
@@ -2301,12 +2294,7 @@ function openVehicleModal(existing) {
     </div>
     <div class="field">
       <label>Trim</label>
-      <select id="f-trim-select">
-        <option value="">Select trim</option>
-        ${TRIM_PRESETS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
-        <option value="${OTHER_VALUE}">Other (type it in)</option>
-      </select>
-      <input type="text" id="f-trim-other" placeholder="Enter trim" style="display:none; margin-top:6px;">
+      <input type="text" id="f-trim" value="${isEdit ? escapeHtml(existing.trim || '') : ''}" placeholder="e.g. SE, Series I, Base">
     </div>
     <div class="field"><label>Cover photo</label><input type="file" id="f-photo" accept="image/*"></div>
     <div id="f-photo-preview"></div>
@@ -2384,30 +2372,8 @@ function openVehicleModal(existing) {
     }
   }
 
-  const trimSelect = modal.querySelector('#f-trim-select');
-  const trimOther = modal.querySelector('#f-trim-other');
-
-  function setTrimValue(value) {
-    const matched = TRIM_PRESETS.find(t => t.toLowerCase() === (value || '').toLowerCase());
-    if (matched) {
-      trimSelect.value = matched;
-      trimOther.style.display = 'none';
-    } else if (value) {
-      trimSelect.value = OTHER_VALUE;
-      trimOther.style.display = '';
-      trimOther.value = value;
-    } else {
-      trimSelect.value = '';
-      trimOther.style.display = 'none';
-      trimOther.value = '';
-    }
-  }
-  if (isEdit) setTrimValue(existing.trim);
-
-  trimSelect.addEventListener('change', () => {
-    trimOther.style.display = trimSelect.value === OTHER_VALUE ? '' : 'none';
-    if (trimSelect.value === OTHER_VALUE) trimOther.focus();
-  });
+  const trimInput = modal.querySelector('#f-trim');
+  function setTrimValue(value) { trimInput.value = value || ''; }
 
   function setMakeValue(value) {
     const matched = MAKES.find(m => m.toLowerCase() === (value || '').toLowerCase());
@@ -2513,7 +2479,7 @@ function openVehicleModal(existing) {
     const saveBtn = modal.querySelector('#f-save');
     saveBtn.disabled = true;
     const selectedType = modal.querySelector('input[name="f-type"]:checked').value;
-    const trim = trimSelect.value === OTHER_VALUE ? trimOther.value.trim() : trimSelect.value;
+    const trim = trimInput.value.trim();
     const fields = {
       year: parseInt(year, 10), make, model,
       trim,
