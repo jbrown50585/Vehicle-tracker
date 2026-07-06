@@ -2508,19 +2508,28 @@ function openVehicleModal(existing) {
       Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
       const budget = 0;
-      const { data: sessionData } = await supabase.auth.getSession();
-      console.log('DEBUG create-vehicle session check', {
-        currentUserId: currentUser.id,
-        currentUserEmail: currentUser.email,
-        sessionUserId: sessionData?.session?.user?.id,
-        sessionUserEmail: sessionData?.session?.user?.email,
-        tokenExpiresAt: sessionData?.session?.expires_at,
-        now: Math.floor(Date.now() / 1000),
-      });
-      const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id, owner_email: currentUser.email }).select().single();
+      // Insert without a chained .select() here, then fetch the row back with a
+      // separate query. Inserting a vehicle and reading it back in one round trip
+      // (INSERT ... RETURNING) hits a Postgres RLS quirk specific to this table:
+      // the "vehicles select" policy calls has_vehicle_access(id), which itself
+      // queries vehicles -- a self-reference that behaves correctly as two plain
+      // separate statements but fails when Postgres evaluates it as part of the
+      // same INSERT...RETURNING statement. Splitting it into two requests avoids
+      // that entirely. Child tables (parts, labor, etc.) don't have this problem
+      // since their access-check function queries a *different* table than the
+      // one being inserted into, so they keep using the normal .insert().select().
+      const newId = crypto.randomUUID();
+      const { error: insertErr } = await supabase.from('vehicles').insert({ id: newId, ...fields, user_id: currentUser.id, owner_email: currentUser.email });
+      if (insertErr) {
+        console.error('vehicle insert error', insertErr);
+        alert('Could not create project: ' + insertErr.message + (insertErr.details ? '\nDetails: ' + insertErr.details : '') + (insertErr.hint ? '\nHint: ' + insertErr.hint : ''));
+        saveBtn.disabled = false;
+        return;
+      }
+      const { data: vRow, error } = await supabase.from('vehicles').select().eq('id', newId).single();
       if (error) {
-        console.error('vehicle insert error', error);
-        alert('Could not create project: ' + error.message + (error.details ? '\nDetails: ' + error.details : '') + (error.hint ? '\nHint: ' + error.hint : ''));
+        console.error('vehicle fetch-after-insert error', error);
+        alert('Vehicle was created but could not be loaded back: ' + error.message);
         saveBtn.disabled = false;
         return;
       }
