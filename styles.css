@@ -55,11 +55,11 @@ header {
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 12px;
-  background: #10141b;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  background: var(--surface-1);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   position: sticky;
   top: 0;
   z-index: 5;
@@ -70,27 +70,27 @@ header {
 header h1 {
   font-size: 19px;
   margin: 0;
-  color: #fff;
+  color: var(--text-primary);
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 header h1 span { color: var(--series-1); }
-.header-tagline { font-size: 11px; color: #9a9a9e; letter-spacing: 0.02em; }
-header .actions button:not(.primary) { background: rgba(255,255,255,0.06); color: #fff; border-color: rgba(255,255,255,0.14); }
-header .section-sub { color: #9a9a9e; }
+.header-tagline { font-size: 11px; color: var(--text-muted); letter-spacing: 0.02em; }
+header .actions button:not(.primary) { background: var(--page); color: var(--text-primary); border-color: var(--border); }
+header .section-sub { color: var(--text-muted); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 #headerNav { display: flex; align-items: center; }
 #headerNav button {
   background: transparent;
-  color: #c3c2b7;
+  color: var(--text-secondary);
   border: none;
   padding: 8px 10px;
   border-radius: 6px;
   font-weight: 500;
 }
-#headerNav button:hover { background: rgba(255,255,255,0.08); color: #fff; }
-#headerNav button.active { background: rgba(255,255,255,0.1); color: #fff; }
+#headerNav button:hover { background: var(--page); color: var(--text-primary); }
+#headerNav button.active { background: var(--page); color: var(--text-primary); }
 #headerNav button .chip { margin-left: 4px; }
 
 #headerSearchWrap { width: 220px; }
@@ -98,14 +98,14 @@ header .section-sub { color: #9a9a9e; }
   width: 100%;
   padding: 7px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: rgba(255,255,255,0.06);
-  color: #fff;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-primary);
   font-family: inherit;
   font-size: 13px;
 }
-#headerSearch::placeholder { color: #8a8a8e; }
-#headerSearch:focus { outline: none; border-color: var(--series-1); background: rgba(255,255,255,0.1); }
+#headerSearch::placeholder { color: var(--text-muted); }
+#headerSearch:focus { outline: none; border-color: var(--series-1); background: var(--surface-1); }
 #headerSearchResults {
   display: none;
   position: absolute;
