@@ -2314,11 +2314,10 @@ function openVehicleModal(existing) {
       <div class="field"><label>Start date</label><input type="date" id="f-start" value="${isEdit ? existing.startDate || '' : ''}"></div>
       <div class="field" id="f-target-field" style="${vehicleType === 'maintenance' ? 'display:none' : ''}"><label>Target finish date</label><input type="date" id="f-target" value="${isEdit ? existing.targetDate || '' : ''}"></div>
     </div>
-    ${isEdit ? '' : `<div class="field"><label>Starting budget ($)</label><input type="number" step="0.01" id="f-budget" placeholder="5000"></div><div class="section-sub">You can split this into more phases later from the Budget tab.</div>`}
-    <div class="field-row">
-      <div class="field"><label>Purchase price ($)</label><input type="number" step="0.01" id="f-purchase" value="${isEdit && existing.purchasePrice != null ? existing.purchasePrice : ''}" placeholder="What you paid for it"></div>
-      <div class="field"><label>Sale price ($)</label><input type="number" step="0.01" id="f-sale" value="${isEdit && existing.salePrice != null ? existing.salePrice : ''}" placeholder="Leave blank until sold"></div>
-    </div>
+    ${isEdit ? `<div class="field-row">
+      <div class="field"><label>Purchase price ($)</label><input type="number" step="0.01" id="f-purchase" value="${existing.purchasePrice != null ? existing.purchasePrice : ''}" placeholder="What you paid for it"></div>
+      <div class="field"><label>Sale price ($)</label><input type="number" step="0.01" id="f-sale" value="${existing.salePrice != null ? existing.salePrice : ''}" placeholder="Leave blank until sold"></div>
+    </div>` : ''}
     <div class="modal-actions">
       <button id="f-cancel">Cancel</button>
       <button class="primary" id="f-save">${isEdit ? 'Save changes' : (vehicleType === 'maintenance' ? 'Add vehicle' : 'Create project')}</button>
@@ -2522,10 +2521,12 @@ function openVehicleModal(existing) {
       start_date: modal.querySelector('#f-start').value || null,
       target_date: selectedType === 'maintenance' ? null : (modal.querySelector('#f-target').value || null),
       vehicle_type: selectedType,
-      purchase_price: modal.querySelector('#f-purchase').value !== '' ? parseFloat(modal.querySelector('#f-purchase').value) : null,
-      sale_price: modal.querySelector('#f-sale').value !== '' ? parseFloat(modal.querySelector('#f-sale').value) : null,
     };
     if (isEdit) {
+      const purchaseInput = modal.querySelector('#f-purchase').value;
+      const saleInput = modal.querySelector('#f-sale').value;
+      fields.purchase_price = purchaseInput !== '' ? parseFloat(purchaseInput) : null;
+      fields.sale_price = saleInput !== '' ? parseFloat(saleInput) : null;
       let finalCoverPath = photoState.path;
       const oldCover = existing.coverPhoto || null;
       if (photoState.blob) {
@@ -2540,7 +2541,7 @@ function openVehicleModal(existing) {
       if (error) { alert('Could not save: ' + error.message); saveBtn.disabled = false; return; }
       Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
-      const budget = parseFloat(modal.querySelector('#f-budget').value) || 0;
+      const budget = 0;
       const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id, owner_email: currentUser.email }).select().single();
       if (error) {
         console.error('vehicle insert error', error);
