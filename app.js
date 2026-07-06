@@ -899,20 +899,26 @@ function renderDetail(vehicleId) {
   }
   markVehicleVisited(v);
 
+  const isMaintenance = v.vehicleType === 'maintenance';
+  const tabDefs = isMaintenance
+    ? [['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']]
+    : [['budget', 'Budget'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']];
+  const activeTab = isMaintenance && currentView.tab === 'budget' ? 'parts' : currentView.tab;
+
   const tabs = document.createElement('div');
   tabs.className = 'tabs';
-  [['budget', 'Budget'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']].forEach(([key, label]) => {
+  tabDefs.forEach(([key, label]) => {
     const btn = document.createElement('button');
-    btn.className = 'tab-btn' + (currentView.tab === key ? ' active' : '');
+    btn.className = 'tab-btn' + (activeTab === key ? ' active' : '');
     btn.textContent = label;
     btn.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: key }));
     tabs.appendChild(btn);
   });
   wrap.appendChild(tabs);
 
-  if (currentView.tab === 'budget') wrap.appendChild(renderBudgetTab(v));
-  else if (currentView.tab === 'parts') wrap.appendChild(renderPartsTab(v));
-  else if (currentView.tab === 'notes') wrap.appendChild(renderNotesTab(v));
+  if (activeTab === 'budget') wrap.appendChild(renderBudgetTab(v));
+  else if (activeTab === 'parts') wrap.appendChild(renderPartsTab(v));
+  else if (activeTab === 'notes') wrap.appendChild(renderNotesTab(v));
   else wrap.appendChild(renderJournalTab(v));
 
   return wrap;
@@ -2158,7 +2164,7 @@ function renderJournalTab(v) {
   const wrap = document.createElement('div');
   wrap.appendChild(renderFuelSection(v));
   wrap.appendChild(renderMaintenanceSection(v));
-  wrap.appendChild(renderChecklistSection(v));
+  if (v.vehicleType !== 'maintenance') wrap.appendChild(renderChecklistSection(v));
 
   const header = document.createElement('div');
   header.className = 'section-header';
@@ -2315,15 +2321,18 @@ function openVehicleModal(existing) {
     </div>
     <div class="modal-actions">
       <button id="f-cancel">Cancel</button>
-      <button class="primary" id="f-save">${isEdit ? 'Save changes' : 'Create project'}</button>
+      <button class="primary" id="f-save">${isEdit ? 'Save changes' : (vehicleType === 'maintenance' ? 'Add vehicle' : 'Create project')}</button>
     </div>
   `;
   const backdrop = openModalBackdrop(modal);
 
   const targetField = modal.querySelector('#f-target-field');
+  const saveBtnEl = modal.querySelector('#f-save');
   modal.querySelectorAll('input[name="f-type"]').forEach(radio => {
     radio.addEventListener('change', () => {
-      targetField.style.display = modal.querySelector('input[name="f-type"]:checked').value === 'maintenance' ? 'none' : '';
+      const type = modal.querySelector('input[name="f-type"]:checked').value;
+      targetField.style.display = type === 'maintenance' ? 'none' : '';
+      if (!isEdit) saveBtnEl.textContent = type === 'maintenance' ? 'Add vehicle' : 'Create project';
     });
   });
 
