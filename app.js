@@ -6,6 +6,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const PHOTO_BUCKET = 'vehicle-photos';
 
 const CATEGORIES = ['Engine','Transmission/Drivetrain','Brakes','Suspension/Steering','Body & Paint','Interior','Electrical','Trim/Exterior','Tools & Supplies','Other'];
+const CATEGORY_ICONS = {
+  'Engine': '🔧', 'Transmission/Drivetrain': '⚙️', 'Brakes': '🛑', 'Suspension/Steering': '🎯',
+  'Body & Paint': '🎨', 'Interior': '🪑', 'Electrical': '⚡', 'Trim/Exterior': '✨',
+  'Tools & Supplies': '🧰', 'Other': '📦',
+};
+const TAB_ICONS = { budget: '💰', parts: '🔩', journal: '📓', notes: '📝' };
 const STATUSES = [
   { key: 'needed',    label: 'Needed',    color: 'var(--text-muted)' },
   { key: 'ordered',   label: 'Ordered',   color: 'var(--series-1)' },
@@ -667,11 +673,21 @@ function renderVehicleCard(v) {
   const newCount = totalNewActivity(v);
 
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'card vehicle-card';
   card.innerHTML = `
-    ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : ''}
+    <div class="vehicle-card-photo">
+      ${v.coverPhoto ? `<img class="lazy-photo card-cover" data-photo-path="${v.coverPhoto}">` : `<div class="card-cover card-cover-placeholder">${v.vehicleType === 'maintenance' ? '🚗' : '🔧'}</div>`}
+      <div class="vehicle-card-badges">
+        <span class="chip chip-overlay">${v.vehicleType === 'maintenance' ? '🚗 Maintenance' : '🔧 Project'}</span>
+        ${v.ownerId !== currentUser.id ? '<span class="chip chip-overlay">🤝 Shared</span>' : ''}
+      </div>
+      ${(alertCount > 0 || newCount > 0) ? `<div class="vehicle-card-badges vehicle-card-badges-right">
+        ${alertCount > 0 ? `<span class="chip chip-overlay" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}
+        ${newCount > 0 ? `<span class="chip chip-overlay" style="color:var(--series-1)">🔔 ${newCount} new</span>` : ''}
+      </div>` : ''}
+    </div>
     <h3>${v.year} ${escapeHtml(v.make)} ${escapeHtml(v.model)}${v.trim ? ' ' + escapeHtml(v.trim) : ''}</h3>
-    <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'} &middot; <span class="chip">${v.vehicleType === 'maintenance' ? 'Maintenance' : 'Project'}</span>${v.ownerId !== currentUser.id ? ' <span class="chip">Shared</span>' : ''}${alertCount > 0 ? ` <span class="chip" style="color:var(--serious)">⚠ ${alertCount} due</span>` : ''}${newCount > 0 ? ` <span class="chip" style="color:var(--series-1)">🔔 ${newCount} new</span>` : ''}</div>
+    <div class="vin">${v.vin ? 'VIN: ' + escapeHtml(v.vin) : 'No VIN entered'}</div>
     <div class="timeframe">${v.vehicleType === 'maintenance' ? 'Ongoing' : `${v.startDate ? formatDate(v.startDate) : '?'} &rarr; ${v.targetDate ? formatDate(v.targetDate) : 'no target date'}`}</div>
     <div class="meter-row">
       <span class="meter-remaining">${money(remaining)}</span>
@@ -903,7 +919,7 @@ function renderDetail(vehicleId) {
   tabDefs.forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (activeTab === key ? ' active' : '');
-    btn.textContent = label;
+    btn.innerHTML = `<span class="tab-icon">${TAB_ICONS[key] || ''}</span><span class="tab-label">${label}</span>`;
     btn.addEventListener('click', () => navigate({ screen: 'detail', vehicleId: v.id, tab: key }));
     tabs.appendChild(btn);
   });
@@ -1353,7 +1369,7 @@ function openFavoriteModal(v, existing) {
     <h2>${isEdit ? 'Edit favorite' : 'Add favorite'}</h2>
     <div class="field"><label>Part name</label><input type="text" id="fav-name" value="${isEdit ? escapeHtml(existing.name) : ''}" placeholder="Oil filter"></div>
     <div class="field-row">
-      <div class="field"><label>Category</label><select id="fav-category">${CATEGORIES.map(c => `<option value="${c}" ${isEdit && existing.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Category</label><select id="fav-category">${CATEGORIES.map(c => `<option value="${c}" ${isEdit && existing.category === c ? 'selected' : ''}>${CATEGORY_ICONS[c] || ''} ${c}</option>`).join('')}</select></div>
       <div class="field"><label>Part number / SKU</label><input type="text" id="fav-partnum" value="${isEdit ? escapeHtml(existing.partNumber || '') : ''}" placeholder="e.g. PH3593A"></div>
     </div>
     <div class="field"><label>Vendor</label><input type="text" id="fav-vendor" value="${isEdit ? escapeHtml(existing.vendor || '') : ''}" placeholder="RockAuto, Amazon..."></div>
@@ -1430,7 +1446,7 @@ function renderPartsTab(v) {
     section.className = 'section';
     const secHeader = document.createElement('div');
     secHeader.className = 'section-header';
-    secHeader.innerHTML = `<h3>${escapeHtml(category)}</h3><span class="section-sub">${items.length} item${items.length === 1 ? '' : 's'}</span>`;
+    secHeader.innerHTML = `<h3><span class="category-icon">${CATEGORY_ICONS[category] || '📦'}</span>${escapeHtml(category)}</h3><span class="section-sub">${items.length} item${items.length === 1 ? '' : 's'}</span>`;
     const secAddBtn = document.createElement('button');
     secAddBtn.className = 'small';
     secAddBtn.textContent = '+ Add';
@@ -1603,7 +1619,7 @@ function openChecklistItemModal(v, presetCategory) {
   modal.className = 'modal';
   modal.innerHTML = `
     <h2>Add restoration task</h2>
-    <div class="field"><label>Category</label><select id="chk-category">${CATEGORIES.map(c => `<option value="${c}" ${presetCategory === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div class="field"><label>Category</label><select id="chk-category">${CATEGORIES.map(c => `<option value="${c}" ${presetCategory === c ? 'selected' : ''}>${CATEGORY_ICONS[c] || ''} ${c}</option>`).join('')}</select></div>
     <div class="field"><label>Task</label><input type="text" id="chk-task" placeholder="Rebuild carburetor"></div>
     <div class="modal-actions">
       <button id="chk-cancel">Cancel</button>
@@ -2602,7 +2618,7 @@ function openPartModal(v, existing, presetCategory) {
     <h2>${isEdit ? 'Edit part' : 'Add part'}</h2>
     <div class="field"><label>Part name</label><input type="text" id="p-name" value="${isEdit ? escapeHtml(existing.name) : ''}" placeholder="Front brake pads"></div>
     <div class="field-row">
-      <div class="field"><label>Category</label><select id="p-category">${CATEGORIES.map(c => `<option value="${c}" ${defaultCategory === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Category</label><select id="p-category">${CATEGORIES.map(c => `<option value="${c}" ${defaultCategory === c ? 'selected' : ''}>${CATEGORY_ICONS[c] || ''} ${c}</option>`).join('')}</select></div>
       <div class="field"><label>Cost ($)</label><input type="number" step="0.01" id="p-cost" value="${isEdit ? existing.cost : ''}" placeholder="120.00"></div>
     </div>
     <div class="field-row">
