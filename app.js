@@ -2508,6 +2508,15 @@ function openVehicleModal(existing) {
       Object.assign(existing, { year: fields.year, make, model, trim: fields.trim, vin: fields.vin, startDate: fields.start_date, targetDate: fields.target_date, vehicleType: fields.vehicle_type, coverPhoto: finalCoverPath, purchasePrice: fields.purchase_price, salePrice: fields.sale_price });
     } else {
       const budget = 0;
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log('DEBUG create-vehicle session check', {
+        currentUserId: currentUser.id,
+        currentUserEmail: currentUser.email,
+        sessionUserId: sessionData?.session?.user?.id,
+        sessionUserEmail: sessionData?.session?.user?.email,
+        tokenExpiresAt: sessionData?.session?.expires_at,
+        now: Math.floor(Date.now() / 1000),
+      });
       const { data: vRow, error } = await supabase.from('vehicles').insert({ ...fields, user_id: currentUser.id, owner_email: currentUser.email }).select().single();
       if (error) {
         console.error('vehicle insert error', error);
