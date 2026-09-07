@@ -1,4 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  BUILD_COMPONENTS, BUILD_STATES, UNPLACED_CATEGORIES, DEFAULT_TRANSFORM,
+  componentPartsFor, componentState, createBuildViewer, normalizeLayout,
+  isDefaultTransform, layoutIsCustomized,
+} from '/build3d.js';
 
 const SUPABASE_URL = 'https://fdewpzbeqkkpciqmygdi.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_NsyWsfX22nRMBqqYnp8TMA_MGaj2woh';
@@ -11,7 +16,7 @@ const CATEGORY_ICONS = {
   'Body & Paint': '🎨', 'Interior': '🪑', 'Electrical': '⚡', 'Trim/Exterior': '✨',
   'Tools & Supplies': '🧰', 'Other': '📦',
 };
-const TAB_ICONS = { budget: '💰', parts: '🔩', journal: '📓', notes: '📝' };
+const TAB_ICONS = { budget: '💰', engine: '🛠️', build: '🚗', parts: '🔩', journal: '📓', notes: '📝' };
 const STATUSES = [
   { key: 'needed',    label: 'Needed',    color: 'var(--text-muted)' },
   { key: 'ordered',   label: 'Ordered',   color: 'var(--series-1)' },
@@ -81,6 +86,7 @@ let authError = '';
 let authInfo = '';
 let data = { vehicles: [], contacts: [] };
 let currentView = { screen: 'home' };
+let buildLayoutsAvailable = true;
 
 // --- URL routing ---
 // /                              -> vehicle list
@@ -88,8 +94,8 @@ let currentView = { screen: 'home' };
 // /vehicle/:id/parts             -> Parts tab
 // /vehicle/:id/buildlog          -> Build log tab
 
-const TAB_TO_SEGMENT = { budget: 'budget', parts: 'parts', journal: 'buildlog', notes: 'notes' };
-const SEGMENT_TO_TAB = { budget: 'budget', parts: 'parts', buildlog: 'journal', notes: 'notes' };
+const TAB_TO_SEGMENT = { budget: 'budget', engine: 'engine', build: 'build', parts: 'parts', journal: 'buildlog', notes: 'notes' };
+const SEGMENT_TO_TAB = { budget: 'budget', engine: 'engine', build: 'build', parts: 'parts', buildlog: 'journal', notes: 'notes' };
 
 function parseRoute() {
   const segments = window.location.pathname.split('/').filter(Boolean);
@@ -160,6 +166,7 @@ function dbVehicleToLocal(row) {
     salePrice: row.sale_price != null ? Number(row.sale_price) : null,
     ownerId: row.user_id, ownerEmail: row.owner_email,
     phases: [], parts: [], labor: [], credits: [], journal: [], checklist: [], favorites: [], maintenance: [], fuel: [], notes: [], collaborators: [], lastViewedAt: null,
+    buildLayout: null,
   };
 }
 function dbPhaseToLocal(row) { return { id: row.id, vehicleId: row.vehicle_id, name: row.name, budget: Number(row.budget) }; }
@@ -249,7 +256,7 @@ function dbContactToLocal(row) {
 }
 
 async function loadAllData() {
-  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes, contactsRes, viewsRes] = await Promise.all([
+  const [vehiclesRes, phasesRes, partsRes, laborRes, creditsRes, journalRes, checklistRes, favoritesRes, maintenanceRes, fuelRes, notesRes, collabRes, contactsRes, viewsRes, buildLayoutsRes] = await Promise.all([
     supabase.from('vehicles').select('*').order('created_at'),
     supabase.from('phases').select('*'),
     supabase.from('parts').select('*'),
@@ -264,6 +271,10 @@ async function loadAllData() {
     supabase.from('vehicle_collaborators').select('*'),
     supabase.from('known_collaborators').select('*').order('nickname'),
     supabase.from('vehicle_views').select('*'),
+    // Added later than the rest of the schema — if this project's database
+    // hasn't had the migration run yet the query just errors, and the 3D tab
+    // falls back to the stock layout instead of breaking the whole load.
+    supabase.from('build_layouts').select('*'),
   ]);
   const vehicles = (vehiclesRes.data || []).map(dbVehicleToLocal);
   vehicles.forEach(v => {
@@ -280,7 +291,10 @@ async function loadAllData() {
     v.collaborators = (collabRes.data || []).filter(r => r.vehicle_id === v.id).map(dbCollaboratorToLocal);
     const viewRow = (viewsRes.data || []).find(r => r.vehicle_id === v.id);
     v.lastViewedAt = viewRow ? viewRow.last_viewed_at : null;
+    const layoutRow = (buildLayoutsRes.data || []).find(r => r.vehicle_id === v.id);
+    v.buildLayout = layoutRow ? layoutRow.layout : null;
   });
+  buildLayoutsAvailable = !buildLayoutsRes.error;
   data = { vehicles, contacts: (contactsRes.data || []).map(dbContactToLocal) };
 }
 
@@ -557,6 +571,9 @@ function openLightboxForPath(path) { getPhotoUrl(path).then(url => { if (url) op
 
 function render() {
   const app = document.getElementById('app');
+  // The 3D tab holds a WebGL context and a render loop; the wholesale
+  // innerHTML wipe below would orphan both, so tear it down first.
+  disposeBuildViewer();
   app.innerHTML = '';
   updateHeaderForAuth();
 
@@ -910,8 +927,8 @@ function renderDetail(vehicleId) {
 
   const isMaintenance = v.vehicleType === 'maintenance';
   const tabDefs = isMaintenance
-    ? [['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']]
-    : [['budget', 'Budget'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']];
+    ? [['engine', 'Engine'], ['build', '3D build'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']]
+    : [['budget', 'Budget'], ['engine', 'Engine'], ['build', '3D build'], ['parts', 'Parts'], ['journal', 'Build log'], ['notes', 'Notes']];
   const activeTab = isMaintenance && currentView.tab === 'budget' ? 'parts' : currentView.tab;
 
   const tabs = document.createElement('div');
@@ -926,6 +943,8 @@ function renderDetail(vehicleId) {
   wrap.appendChild(tabs);
 
   if (activeTab === 'budget') wrap.appendChild(renderBudgetTab(v));
+  else if (activeTab === 'engine') wrap.appendChild(renderEngineTab(v));
+  else if (activeTab === 'build') wrap.appendChild(renderBuildTab(v));
   else if (activeTab === 'parts') wrap.appendChild(renderPartsTab(v));
   else if (activeTab === 'notes') wrap.appendChild(renderNotesTab(v));
   else wrap.appendChild(renderJournalTab(v));
@@ -1267,6 +1286,384 @@ async function deleteCredit(v, c) {
   render();
 }
 
+// --- 3D build tab ---
+
+let activeBuildViewer = null;
+// createBuildViewer() is async (three.js loads on demand), so a viewer can
+// still be in flight when the user navigates away and a second one starts.
+// Only the newest request is allowed to claim activeBuildViewer.
+let buildViewerToken = 0;
+
+function disposeBuildViewer() {
+  buildViewerToken += 1;
+  if (activeBuildViewer) {
+    activeBuildViewer.dispose();
+    activeBuildViewer = null;
+  }
+}
+
+function buildStatesFor(v) {
+  const states = {};
+  BUILD_COMPONENTS.forEach(c => { states[c.key] = componentState(componentPartsFor(c, v.parts)); });
+  return states;
+}
+
+async function saveBuildLayout(v, layout) {
+  const { error } = await supabase.from('build_layouts').upsert(
+    { vehicle_id: v.id, layout, updated_by: currentUser.id, updated_at: new Date().toISOString() },
+    { onConflict: 'vehicle_id' }
+  );
+  if (error) {
+    return error.code === '42P01'
+      ? 'The build_layouts table is missing — run supabase/schema.sql in your Supabase SQL editor to enable saving.'
+      : 'Could not save layout: ' + error.message;
+  }
+  v.buildLayout = layout;
+  return null;
+}
+
+function renderBuildTab(v) {
+  const wrap = document.createElement('div');
+  const states = buildStatesFor(v);
+  const savedLayout = normalizeLayout(v.buildLayout);
+  let workingLayout = normalizeLayout(v.buildLayout);
+  let selectedKey = null;
+  let editing = false;
+  let viewer = null;
+
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  header.innerHTML = '<div><h3>3D build</h3><span class="section-sub">Every system coloured by how far along its parts are. Drag to orbit, scroll to zoom, tap a part of the car to open it.</span></div>';
+  const editBtn = document.createElement('button');
+  editBtn.textContent = 'Edit layout';
+  header.appendChild(editBtn);
+  wrap.appendChild(header);
+
+  const installedCount = Object.values(states).filter(s => s === 'installed').length;
+  const startedCount = Object.values(states).filter(s => s !== 'empty').length;
+  const summary = document.createElement('div');
+  summary.className = 'summary-panel';
+  summary.innerHTML = `
+    <div class="summary-figures">
+      <div class="figure"><div class="value">${installedCount}/${BUILD_COMPONENTS.length}</div><div class="label">Systems fully installed</div></div>
+      <div class="figure"><div class="value">${startedCount}</div><div class="label">Systems started</div></div>
+      <div class="figure"><div class="value">${v.parts.filter(p => !UNPLACED_CATEGORIES.includes(p.category)).length}</div><div class="label">Parts placed on the car</div></div>
+    </div>
+    <div class="engine-progress"><span style="width:${Math.round((installedCount / BUILD_COMPONENTS.length) * 100)}%"></span></div>
+    <div class="build3d-legend">${Object.entries(BUILD_STATES)
+      .map(([, s]) => `<span class="build3d-legend-item"><span class="status-dot" style="background:${s.cssVar}"></span>${s.label}</span>`).join('')}</div>
+  `;
+  wrap.appendChild(summary);
+
+  const stageWrap = document.createElement('div');
+  stageWrap.className = 'build3d';
+  stageWrap.innerHTML = `
+    <div class="build3d-stage">
+      <div class="build3d-canvas"></div>
+      <div class="build3d-status">Loading 3D view…</div>
+      <div class="build3d-toolbar">
+        <label class="build3d-slider"><span>Exploded</span><input type="range" id="build-explode" min="0" max="100" value="0"></label>
+        <button class="small" id="build-reset-view">Reset view</button>
+      </div>
+    </div>
+    <aside class="build3d-side">
+      <div class="build3d-side-title">Systems</div>
+      <div class="build3d-list"></div>
+      <div class="build3d-detail"></div>
+    </aside>
+  `;
+  wrap.appendChild(stageWrap);
+
+  const canvasHost = stageWrap.querySelector('.build3d-canvas');
+  const statusEl = stageWrap.querySelector('.build3d-status');
+  const listEl = stageWrap.querySelector('.build3d-list');
+  const detailEl = stageWrap.querySelector('.build3d-detail');
+
+  const unplaced = v.parts.filter(p => UNPLACED_CATEGORIES.includes(p.category));
+  if (unplaced.length > 0) {
+    const note = document.createElement('div');
+    note.className = 'section-sub build3d-unplaced';
+    note.textContent = `${unplaced.length} ${unplaced.length === 1 ? 'part has' : 'parts have'} no place on the car (${UNPLACED_CATEGORIES.join(', ')}) — track ${unplaced.length === 1 ? 'it' : 'them'} on the Parts tab.`;
+    wrap.appendChild(note);
+  }
+
+  // --- Side panel ---
+
+  function renderComponentList() {
+    listEl.innerHTML = '';
+    BUILD_COMPONENTS.forEach(def => {
+      const parts = componentPartsFor(def, v.parts);
+      const state = BUILD_STATES[states[def.key]];
+      const transform = workingLayout.components[def.key];
+      const row = document.createElement('div');
+      row.className = 'build3d-row' + (selectedKey === def.key ? ' active' : '') + (transform.hidden ? ' hidden-comp' : '');
+
+      const main = document.createElement('button');
+      main.className = 'build3d-row-main';
+      main.innerHTML = `
+        <span class="status-dot" style="background:${state.cssVar}"></span>
+        <span class="build3d-row-text">
+          <strong>${def.label}</strong>
+          <span class="section-sub">${parts.length === 0 ? def.hint : `${parts.length} ${parts.length === 1 ? 'part' : 'parts'} · ${parts.filter(p => p.status === 'installed').length} installed`}</span>
+        </span>
+        ${!isDefaultTransform(transform) ? '<span class="chip">edited</span>' : ''}
+      `;
+      main.addEventListener('click', () => selectComponent(selectedKey === def.key ? null : def.key));
+      row.appendChild(main);
+
+      const eye = document.createElement('button');
+      eye.className = 'small build3d-eye';
+      eye.title = transform.hidden ? 'Show in 3D' : 'Hide in 3D';
+      eye.textContent = transform.hidden ? '🚫' : '👁';
+      eye.addEventListener('click', (e) => {
+        e.stopPropagation();
+        transform.hidden = !transform.hidden;
+        if (viewer) viewer.setTransform(def.key, { hidden: transform.hidden });
+        renderComponentList();
+        renderDetailPanel();
+      });
+      row.appendChild(eye);
+      listEl.appendChild(row);
+    });
+  }
+
+  function renderDetailPanel() {
+    detailEl.innerHTML = '';
+    if (!selectedKey) {
+      if (editing) detailEl.appendChild(editFooter());
+      else {
+        const hint = document.createElement('div');
+        hint.className = 'section-sub build3d-hint';
+        hint.textContent = 'Pick a system — on the car or in the list — to see its parts.';
+        detailEl.appendChild(hint);
+      }
+      return;
+    }
+
+    const def = BUILD_COMPONENTS.find(c => c.key === selectedKey);
+    const parts = componentPartsFor(def, v.parts);
+    const state = BUILD_STATES[states[def.key]];
+
+    const head = document.createElement('div');
+    head.className = 'build3d-detail-head';
+    head.innerHTML = `<strong>${def.label}</strong>`;
+    const headRight = document.createElement('span');
+    headRight.className = 'build3d-detail-head-right';
+    headRight.innerHTML = `<span class="chip" style="color:${state.cssVar}">${state.label}</span>`;
+    const zoomBtn = document.createElement('button');
+    zoomBtn.className = 'small build3d-zoom';
+    zoomBtn.title = 'Zoom the camera to this system';
+    zoomBtn.textContent = '⤢';
+    zoomBtn.addEventListener('click', () => { if (viewer) viewer.focus(def.key); });
+    headRight.appendChild(zoomBtn);
+    head.appendChild(headRight);
+    detailEl.appendChild(head);
+
+    const sub = document.createElement('div');
+    sub.className = 'section-sub';
+    sub.textContent = def.hint;
+    detailEl.appendChild(sub);
+
+    if (editing) detailEl.appendChild(transformControls(def));
+
+    const partsList = document.createElement('div');
+    partsList.className = 'build3d-parts';
+    if (parts.length === 0) {
+      partsList.innerHTML = `<div class="empty-state">Nothing logged under ${escapeHtml(def.categories.join(', '))} yet.</div>`;
+    } else {
+      parts.forEach(p => {
+        const status = statusInfo(p.status);
+        const row = document.createElement('div');
+        row.className = 'build3d-part';
+        row.innerHTML = `<div><strong>${escapeHtml(p.name)}</strong>${p.vendor ? `<div class="section-sub">${escapeHtml(p.vendor)}</div>` : ''}</div><span class="chip" style="color:${status.color}">${status.label}</span><strong class="cost">${money(p.cost)}</strong>`;
+        row.addEventListener('click', () => openPartModal(v, p));
+        partsList.appendChild(row);
+      });
+    }
+    detailEl.appendChild(partsList);
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'small primary';
+    addBtn.textContent = `+ Add ${def.label.toLowerCase()} part`;
+    addBtn.addEventListener('click', () => openPartModal(v, null, def.categories[0]));
+    detailEl.appendChild(addBtn);
+
+    if (editing) detailEl.appendChild(editFooter());
+  }
+
+  function transformControls(def) {
+    const box = document.createElement('div');
+    box.className = 'build3d-transform';
+    const t = workingLayout.components[def.key];
+
+    const slider = (label, value, min, max, step, onInput) => {
+      const wrapEl = document.createElement('label');
+      wrapEl.className = 'build3d-slider';
+      wrapEl.innerHTML = `<span>${label}</span>`;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = min; input.max = max; input.step = step; input.value = value;
+      const readout = document.createElement('em');
+      readout.textContent = Number(value).toFixed(2);
+      input.addEventListener('input', () => {
+        readout.textContent = Number(input.value).toFixed(2);
+        onInput(Number(input.value));
+      });
+      wrapEl.appendChild(input);
+      wrapEl.appendChild(readout);
+      return wrapEl;
+    };
+    const push = () => {
+      if (viewer) viewer.setTransform(def.key, { pos: t.pos, scale: t.scale, rotY: t.rotY });
+      markDirty();
+    };
+
+    const group = (title, rows) => {
+      const g = document.createElement('div');
+      g.className = 'build3d-transform-group';
+      g.innerHTML = `<div class="build3d-transform-title">${title}</div>`;
+      rows.forEach(r => g.appendChild(r));
+      box.appendChild(g);
+    };
+
+    group('Move (metres)', ['x', 'y', 'z'].map((axis, i) =>
+      slider(axis.toUpperCase(), t.pos[i], -2.5, 2.5, 0.05, val => { t.pos[i] = val; push(); })
+    ));
+    group('Size (×)', ['x', 'y', 'z'].map((axis, i) =>
+      slider(axis.toUpperCase(), t.scale[i], 0.3, 2.5, 0.05, val => { t.scale[i] = val; push(); })
+    ));
+    group('Rotate', [slider('Y°', t.rotY, -180, 180, 1, val => { t.rotY = val; push(); })]);
+
+    const resetOne = document.createElement('button');
+    resetOne.className = 'small';
+    resetOne.textContent = 'Reset this system';
+    resetOne.addEventListener('click', () => {
+      Object.assign(t, { pos: DEFAULT_TRANSFORM.pos.slice(), scale: DEFAULT_TRANSFORM.scale.slice(), rotY: 0 });
+      if (viewer) viewer.setTransform(def.key, t);
+      markDirty();
+      renderDetailPanel();
+      renderComponentList();
+    });
+    box.appendChild(resetOne);
+    return box;
+  }
+
+  function isDirty() {
+    return JSON.stringify(workingLayout) !== JSON.stringify(savedLayout);
+  }
+  function markDirty() {
+    const footer = detailEl.querySelector('.build3d-edit-footer');
+    if (footer) footer.classList.toggle('dirty', isDirty());
+    const saveBtn = detailEl.querySelector('#build-save');
+    if (saveBtn) saveBtn.disabled = !isDirty();
+  }
+
+  function editFooter() {
+    const footer = document.createElement('div');
+    footer.className = 'build3d-edit-footer' + (isDirty() ? ' dirty' : '');
+
+    const msg = document.createElement('div');
+    msg.className = 'section-sub';
+    msg.textContent = buildLayoutsAvailable
+      ? 'Move, resize and rotate each system so the mock-up matches your vehicle.'
+      : 'Editing works, but saving needs the build_layouts table — run supabase/schema.sql.';
+    footer.appendChild(msg);
+
+    const row = document.createElement('div');
+    row.className = 'field-row';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'primary small';
+    saveBtn.id = 'build-save';
+    saveBtn.textContent = 'Save layout';
+    saveBtn.disabled = !isDirty();
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      const error = await saveBuildLayout(v, workingLayout);
+      saveBtn.textContent = 'Save layout';
+      if (error) { msg.textContent = error; saveBtn.disabled = false; return; }
+      Object.assign(savedLayout, JSON.parse(JSON.stringify(workingLayout)));
+      msg.textContent = 'Layout saved.';
+      markDirty();
+      renderComponentList();
+    });
+    row.appendChild(saveBtn);
+
+    const revertBtn = document.createElement('button');
+    revertBtn.className = 'small';
+    revertBtn.textContent = 'Discard changes';
+    revertBtn.addEventListener('click', () => {
+      workingLayout = normalizeLayout(savedLayout);
+      if (viewer) viewer.setLayout(workingLayout);
+      renderComponentList();
+      renderDetailPanel();
+    });
+    row.appendChild(revertBtn);
+
+    if (layoutIsCustomized(workingLayout)) {
+      const resetAll = document.createElement('button');
+      resetAll.className = 'small danger';
+      resetAll.textContent = 'Reset everything';
+      resetAll.addEventListener('click', () => {
+        workingLayout = normalizeLayout(null);
+        if (viewer) viewer.setLayout(workingLayout);
+        renderComponentList();
+        renderDetailPanel();
+      });
+      row.appendChild(resetAll);
+    }
+
+    footer.appendChild(row);
+    return footer;
+  }
+
+  function selectComponent(key) {
+    selectedKey = key;
+    if (viewer) viewer.select(key);
+    renderComponentList();
+    renderDetailPanel();
+  }
+
+  editBtn.addEventListener('click', () => {
+    editing = !editing;
+    editBtn.textContent = editing ? 'Done editing' : 'Edit layout';
+    editBtn.className = editing ? 'primary' : '';
+    stageWrap.classList.toggle('editing', editing);
+    renderDetailPanel();
+  });
+
+  stageWrap.querySelector('#build-explode').addEventListener('input', (e) => {
+    if (viewer) viewer.setExplode(Number(e.target.value) / 100);
+  });
+  stageWrap.querySelector('#build-reset-view').addEventListener('click', () => {
+    if (!viewer) return;
+    viewer.resetTarget();
+    viewer.resetCamera();
+  });
+
+  renderComponentList();
+  renderDetailPanel();
+
+  const token = ++buildViewerToken;
+  createBuildViewer(canvasHost, {
+    layout: workingLayout,
+    onSelect: (key) => { if (token === buildViewerToken) selectComponent(key); },
+  }).then(created => {
+    if (!created) return;
+    if (token !== buildViewerToken) { created.dispose(); return; }
+    viewer = created;
+    activeBuildViewer = created;
+    viewer.setStates(states);
+    statusEl.style.display = 'none';
+  }).catch(err => {
+    console.error('3D build view failed to load:', err);
+    if (token === buildViewerToken) statusEl.textContent = 'Could not start the 3D view — your browser or device may not support WebGL.';
+  });
+
+  return wrap;
+}
+
 // --- Parts tab ---
 
 function renderFavoritesSection(v) {
@@ -1403,6 +1800,98 @@ function openFavoriteModal(v, existing) {
     backdrop.remove();
     render();
   });
+}
+
+function renderEngineTab(v) {
+  const wrap = document.createElement('div');
+  const engineParts = v.parts.filter(p => ['Engine', 'Electrical', 'Tools & Supplies'].includes(p.category));
+  const buyParts = engineParts.filter(p => PLANNED_STATUSES.includes(p.status));
+  const installedParts = engineParts.filter(p => ['received', 'installed'].includes(p.status));
+  const partsByCategory = category => engineParts.filter(p => p.category === category);
+
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  header.innerHTML = '<div><h3>Engine builder</h3><span class="section-sub">Lay out the systems you are assembling and keep the buy list beside them.</span></div>';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'primary';
+  addBtn.textContent = '+ Add engine part';
+  addBtn.addEventListener('click', () => openPartModal(v, null, 'Engine'));
+  header.appendChild(addBtn);
+  wrap.appendChild(header);
+
+  const summary = document.createElement('div');
+  summary.className = 'summary-panel engine-summary';
+  summary.innerHTML = `
+    <div class="summary-figures">
+      <div class="figure"><div class="value">${engineParts.length}</div><div class="label">Engine system parts</div></div>
+      <div class="figure"><div class="value">${buyParts.length}</div><div class="label">Still to buy</div></div>
+      <div class="figure"><div class="value">${money(buyParts.reduce((sum, p) => sum + Number(p.cost || 0), 0))}</div><div class="label">Planned spend</div></div>
+    </div>
+    <div class="engine-progress"><span style="width:${engineParts.length ? Math.round((installedParts.length / engineParts.length) * 100) : 0}%"></span></div>
+    <div class="section-sub">${installedParts.length} received or installed of ${engineParts.length} tracked</div>
+  `;
+  wrap.appendChild(summary);
+
+  const builder = document.createElement('section');
+  builder.className = 'engine-builder';
+  builder.innerHTML = `
+    <div class="engine-stage-label">ASSEMBLY VIEW</div>
+    <div class="engine-stage">
+      <div class="engine-zone engine-zone-intake"><span class="engine-zone-title">Air &amp; fuel</span><div class="engine-zone-parts"></div></div>
+      <div class="engine-zone engine-zone-block"><span class="engine-zone-title">Engine block</span><div class="engine-zone-parts"></div></div>
+      <div class="engine-zone engine-zone-electrical"><span class="engine-zone-title">Electrical</span><div class="engine-zone-parts"></div></div>
+      <div class="engine-zone engine-zone-tools"><span class="engine-zone-title">Assembly tools</span><div class="engine-zone-parts"></div></div>
+      <div class="engine-crank"><span>POWER</span></div>
+    </div>
+  `;
+  const zones = {
+    intake: builder.querySelector('.engine-zone-intake .engine-zone-parts'),
+    block: builder.querySelector('.engine-zone-block .engine-zone-parts'),
+    electrical: builder.querySelector('.engine-zone-electrical .engine-zone-parts'),
+    tools: builder.querySelector('.engine-zone-tools .engine-zone-parts'),
+  };
+  const addZonePart = (zone, part) => {
+    const card = document.createElement('div');
+    card.className = 'engine-part-chip';
+    const status = statusInfo(part.status);
+    card.innerHTML = `<span>${escapeHtml(part.name)}</span><span class="chip" style="color:${status.color}">${status.label}</span>`;
+    card.title = part.notes || part.name;
+    zones[zone].appendChild(card);
+  };
+  partsByCategory('Engine').forEach(p => addZonePart('block', p));
+  partsByCategory('Electrical').forEach(p => addZonePart('electrical', p));
+  partsByCategory('Tools & Supplies').forEach(p => addZonePart('tools', p));
+  if (zones.block.children.length === 0) zones.block.innerHTML = '<span class="engine-zone-empty">Add your first engine component</span>';
+  if (zones.electrical.children.length === 0) zones.electrical.innerHTML = '<span class="engine-zone-empty">Ignition, starter, charging</span>';
+  if (zones.tools.children.length === 0) zones.tools.innerHTML = '<span class="engine-zone-empty">Gaskets, fluids, tools</span>';
+  zones.intake.innerHTML = '<span class="engine-zone-empty">Fuel, intake, cooling</span>';
+  wrap.appendChild(builder);
+
+  const buySection = document.createElement('section');
+  buySection.className = 'section engine-buy-section';
+  const buyHeader = document.createElement('div');
+  buyHeader.className = 'section-header';
+  buyHeader.innerHTML = `<div><h3>Parts to buy</h3><span class="section-sub">Needed and ordered engine-system items</span></div><strong>${money(buyParts.reduce((sum, p) => sum + Number(p.cost || 0), 0))}</strong>`;
+  buySection.appendChild(buyHeader);
+  if (buyParts.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Your engine buy list is clear.';
+    buySection.appendChild(empty);
+  } else {
+    const list = document.createElement('div');
+    list.className = 'engine-buy-list';
+    buyParts.forEach(part => {
+      const row = document.createElement('div');
+      row.className = 'engine-buy-row';
+      const status = statusInfo(part.status);
+      row.innerHTML = `<div><strong>${escapeHtml(part.name)}</strong><div class="section-sub">${escapeHtml(part.category)}${part.vendor ? ' · ' + escapeHtml(part.vendor) : ''}</div></div><span class="chip" style="color:${status.color}">${status.label}</span><strong class="cost">${money(part.cost)}</strong>`;
+      list.appendChild(row);
+    });
+    buySection.appendChild(list);
+  }
+  wrap.appendChild(buySection);
+  return wrap;
 }
 
 function renderPartsTab(v) {
