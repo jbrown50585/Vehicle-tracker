@@ -147,20 +147,6 @@ create table if not exists checklist_items (
   created_at timestamptz not null default now()
 );
 
--- Saved 3D build layouts: one row per vehicle holding the per-system position,
--- scale, rotation and visibility overrides the user set in the 3D build tab.
--- Stored as jsonb because the shape is owned by build3d.js and will grow as
--- more components are added; nothing in SQL needs to look inside it.
-create table if not exists build_layouts (
-  id uuid primary key default gen_random_uuid(),
-  vehicle_id uuid not null references vehicles(id) on delete cascade,
-  layout jsonb not null default '{}'::jsonb,
-  updated_by uuid references auth.users(id),
-  updated_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  unique (vehicle_id)
-);
-
 create table if not exists known_collaborators (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
@@ -232,16 +218,6 @@ alter table maintenance_items enable row level security;
 alter table fuel_logs enable row level security;
 alter table vehicle_notes enable row level security;
 alter table vehicle_views enable row level security;
-alter table build_layouts enable row level security;
-
-drop policy if exists "build layouts select" on build_layouts;
-drop policy if exists "build layouts insert" on build_layouts;
-drop policy if exists "build layouts update" on build_layouts;
-drop policy if exists "build layouts delete" on build_layouts;
-create policy "build layouts select" on build_layouts for select using (has_vehicle_access(vehicle_id));
-create policy "build layouts insert" on build_layouts for insert with check (has_vehicle_access(vehicle_id));
-create policy "build layouts update" on build_layouts for update using (has_vehicle_access(vehicle_id));
-create policy "build layouts delete" on build_layouts for delete using (has_vehicle_access(vehicle_id));
 
 drop policy if exists "own views select" on vehicle_views;
 drop policy if exists "own views insert" on vehicle_views;

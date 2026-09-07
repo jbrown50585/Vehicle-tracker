@@ -1,11 +1,10 @@
 // Bump this on any meaningful sw.js change so old caches get cleared out.
-const CACHE_NAME = 'vehicle-tracker-v3';
+const CACHE_NAME = 'vehicle-tracker-v4';
 const SHELL_FILES = [
   '/',
   '/index.html',
   '/styles.css',
   '/app.js',
-  '/build3d.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -14,7 +13,7 @@ const SHELL_FILES = [
 
 // Files that change on every deploy — always prefer the network so a reload
 // never shows stale code, but still fall back to cache when offline.
-const NETWORK_FIRST_PATHS = ['/', '/index.html', '/app.js', '/build3d.js', '/styles.css'];
+const NETWORK_FIRST_PATHS = ['/', '/index.html', '/app.js', '/styles.css'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES)));
