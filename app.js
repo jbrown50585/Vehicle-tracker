@@ -1,8 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
-  BUILD_COMPONENTS, BUILD_STATES, UNPLACED_CATEGORIES, DEFAULT_TRANSFORM, BODY_STYLES,
+  BUILD_COMPONENTS, BUILD_STATES, UNPLACED_CATEGORIES, DEFAULT_TRANSFORM, BODY_STYLES, MODIFICATIONS,
   componentPartsFor, componentState, createBuildViewer, normalizeLayout,
   isDefaultTransform, layoutIsCustomized, resolveProfile, guessBodyStyle,
+  defaultMods, modsAreStock,
 } from '/build3d.js';
 
 const SUPABASE_URL = 'https://fdewpzbeqkkpciqmygdi.supabase.co';
@@ -1347,7 +1348,11 @@ function renderBuildTab(v) {
   // now and refine from the VIN's Body Class once that decode comes back.
   let guessedStyle = guessBodyStyle({ make: v.make, model: v.model, trim: v.trim });
   const effectiveStyle = () => workingLayout.bodyStyle || guessedStyle;
-  const effectiveProfile = () => resolveProfile(effectiveStyle(), workingLayout.wheelbaseIn);
+  const effectiveMods = () => workingLayout.mods || defaultMods(effectiveStyle());
+  const effectiveProfile = () => resolveProfile(effectiveStyle(), {
+    wheelbaseIn: workingLayout.wheelbaseIn,
+    mods: effectiveMods(),
+  });
 
   const header = document.createElement('div');
   header.className = 'section-header';
@@ -1419,26 +1424,72 @@ function renderBuildTab(v) {
     const payload = JSON.parse(JSON.stringify(savedLayout));
     payload.bodyStyle = workingLayout.bodyStyle;
     payload.wheelbaseIn = workingLayout.wheelbaseIn;
+    payload.mods = workingLayout.mods;
     const error = await saveBuildLayout(v, payload);
     if (error) { if (statusNode) statusNode.textContent = error; return; }
     savedLayout.bodyStyle = payload.bodyStyle;
     savedLayout.wheelbaseIn = payload.wheelbaseIn;
+    savedLayout.mods = payload.mods ? JSON.parse(JSON.stringify(payload.mods)) : null;
     markDirty();
   }
+  const saveShape = () => persistShape(shapeEl.querySelector('.build3d-shape-note'));
 
+  // Rebuilding the bodywork means regenerating every lofted panel, so coalesce
+  // the stream of events a dragged slider produces into one rebuild per frame.
+  let shapeFrame = null;
   function applyShape() {
-    if (viewer) viewer.setProfile(effectiveProfile());
+    if (shapeFrame) return;
+    shapeFrame = requestAnimationFrame(() => {
+      shapeFrame = null;
+      if (viewer) viewer.setProfile(effectiveProfile());
+    });
+  }
+
+  // A different platform comes with different stock wheels and tyres, so those
+  // reset — but a chop or a channel is the owner's decision and carries over.
+  function retargetMods(nextStyle) {
+    if (!workingLayout.mods) return;
+    const next = defaultMods(nextStyle);
+    MODIFICATIONS.filter(m => !m.fromPlatform).forEach(m => {
+      if (Number.isFinite(workingLayout.mods[m.key])) next[m.key] = workingLayout.mods[m.key];
+    });
+    workingLayout.mods = next;
+  }
+
+  function modSummary(mods, style) {
+    const stock = defaultMods(style);
+    const bits = [];
+    const add = (key, on, off) => {
+      const delta = mods[key] - stock[key];
+      if (Math.abs(delta) < 0.01) return;
+      bits.push(`${delta > 0 ? on : off} ${Math.abs(delta)}"`);
+    };
+    add('chopIn', 'chopped', 'raised roof');
+    add('channelIn', 'channelled', 'unchannelled');
+    add('sectionIn', 'sectioned', 'unsectioned');
+    add('frontIn', 'front down', 'front up');
+    add('rearIn', 'rear down', 'rear up');
+    add('flareIn', 'flared', '');
+    if (Math.abs(mods.tireDiaIn - stock.tireDiaIn) > 0.01) bits.push(`${mods.tireDiaIn}" tyres`);
+    if (Math.abs(mods.wheelDiaIn - stock.wheelDiaIn) > 0.01) bits.push(`${mods.wheelDiaIn}" wheels`);
+    return bits;
   }
 
   function renderShapePanel() {
     shapeEl.innerHTML = '';
-    const style = BODY_STYLES.find(s => s.key === effectiveStyle());
+    const style = effectiveStyle();
+    const styleInfo = BODY_STYLES.find(s => s.key === style);
+    const mods = effectiveMods();
 
     const select = document.createElement('select');
     select.className = 'build3d-style-select';
     const autoLabel = (BODY_STYLES.find(s => s.key === guessedStyle) || {}).label || 'Sedan';
+    const groups = [...new Set(BODY_STYLES.map(s => s.group))];
     select.innerHTML = `<option value="">Auto — ${escapeHtml(autoLabel)}</option>`
-      + BODY_STYLES.map(s => `<option value="${s.key}"${workingLayout.bodyStyle === s.key ? ' selected' : ''}>${escapeHtml(s.label)}</option>`).join('');
+      + groups.map(g => `<optgroup label="${escapeHtml(g)}">`
+        + BODY_STYLES.filter(s => s.group === g)
+          .map(s => `<option value="${s.key}"${workingLayout.bodyStyle === s.key ? ' selected' : ''}>${escapeHtml(s.label)}</option>`).join('')
+        + '</optgroup>').join('');
     shapeEl.appendChild(select);
 
     const wbRow = document.createElement('label');
@@ -1449,7 +1500,7 @@ function renderBuildTab(v) {
     wbInput.min = '50';
     wbInput.max = '200';
     wbInput.step = '0.5';
-    wbInput.placeholder = String(Math.round(resolveProfile(effectiveStyle()).wheelbase / 0.0254));
+    wbInput.placeholder = String(Math.round(resolveProfile(style).wheelbaseIn));
     if (workingLayout.wheelbaseIn) wbInput.value = String(workingLayout.wheelbaseIn);
     wbRow.appendChild(wbInput);
     wbRow.insertAdjacentHTML('beforeend', '<em>in</em>');
@@ -1458,21 +1509,73 @@ function renderBuildTab(v) {
     const note = document.createElement('div');
     note.className = 'section-sub build3d-shape-note';
     const p = effectiveProfile();
-    note.textContent = `${style.label} · ${(p.length * 3.28084).toFixed(1)} ft long · ${(p.wheelbase / 0.0254).toFixed(0)} in wheelbase`;
+    const summary = modSummary(mods, style);
+    note.innerHTML = `${escapeHtml(styleInfo.label)} · ${(p.length * 3.28084).toFixed(1)} ft long · ${p.wheelbaseIn.toFixed(0)} in wheelbase`
+      + (summary.length ? `<br><strong>${escapeHtml(summary.join(' · '))}</strong>` : '');
     shapeEl.appendChild(note);
 
     select.addEventListener('change', () => {
+      const next = select.value || guessedStyle;
+      retargetMods(next);
       workingLayout.bodyStyle = select.value || null;
       applyShape();
       renderShapePanel();
-      persistShape(shapeEl.querySelector('.build3d-shape-note'));
+      saveShape();
     });
     wbInput.addEventListener('change', () => {
       const val = Number(wbInput.value);
       workingLayout.wheelbaseIn = val > 0 ? val : null;
       applyShape();
       renderShapePanel();
-      persistShape(shapeEl.querySelector('.build3d-shape-note'));
+      saveShape();
+    });
+
+    // --- Modifications ---
+    const modsHead = document.createElement('div');
+    modsHead.className = 'build3d-mods-head';
+    modsHead.innerHTML = '<span class="build3d-side-title">Modifications</span>';
+    if (!modsAreStock(style, mods)) {
+      const stockBtn = document.createElement('button');
+      stockBtn.className = 'small';
+      stockBtn.textContent = 'Back to stock';
+      stockBtn.addEventListener('click', () => {
+        workingLayout.mods = null;
+        applyShape();
+        renderShapePanel();
+        saveShape();
+      });
+      modsHead.appendChild(stockBtn);
+    }
+    shapeEl.appendChild(modsHead);
+
+    MODIFICATIONS.forEach(mod => {
+      const row = document.createElement('label');
+      row.className = 'build3d-slider build3d-mod';
+      row.title = mod.hint || '';
+      row.innerHTML = `<span>${escapeHtml(mod.label)}</span>`;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = mod.min; input.max = mod.max; input.step = mod.step;
+      input.value = mods[mod.key];
+      input.dataset.mod = mod.key;
+      const readout = document.createElement('em');
+      const show = (n) => `${Number(n).toFixed(mod.step < 1 ? 1 : 0)} ${mod.unit}`;
+      readout.textContent = show(mods[mod.key]);
+      input.addEventListener('input', () => {
+        readout.textContent = show(input.value);
+        if (!workingLayout.mods) workingLayout.mods = defaultMods(style);
+        workingLayout.mods[mod.key] = Number(input.value);
+        applyShape();
+      });
+      // Only write to the database when the slider is let go, not on every
+      // pixel of the drag.
+      input.addEventListener('change', () => {
+        renderShapePanel();
+        saveShape();
+      });
+      row.appendChild(input);
+      row.appendChild(readout);
+      shapeEl.appendChild(row);
     });
   }
 
