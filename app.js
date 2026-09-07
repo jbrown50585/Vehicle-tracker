@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
-  BUILD_COMPONENTS, BUILD_STATES, UNPLACED_CATEGORIES, DEFAULT_TRANSFORM,
+  BUILD_COMPONENTS, BUILD_STATES, UNPLACED_CATEGORIES, DEFAULT_TRANSFORM, BODY_STYLES,
   componentPartsFor, componentState, createBuildViewer, normalizeLayout,
-  isDefaultTransform, layoutIsCustomized,
+  isDefaultTransform, layoutIsCustomized, resolveProfile, guessBodyStyle,
 } from '/build3d.js';
 
 const SUPABASE_URL = 'https://fdewpzbeqkkpciqmygdi.supabase.co';
@@ -59,10 +59,23 @@ async function decodeVehicleFromVin(vin) {
       make: byVar('Make'),
       model: byVar('Model'),
       trim: byVar('Trim') || byVar('Series'),
+      // Used by the 3D build view to pick the right body shape and stretch it
+      // to the real wheelbase.
+      bodyClass: byVar('Body Class'),
+      wheelbaseIn: Number(byVar('Wheel Base (inches) From')) || Number(byVar('Wheel Base (inches)')) || null,
     };
   } catch (err) {
     return null;
   }
+}
+
+// vPIC only covers 1981-on 17-digit VINs, so plenty of restoration projects
+// get nothing back here and fall through to guessing from the model name.
+const vinDetailsCache = new Map();
+function fetchVinDetails(vin) {
+  if (!vin || vin.length !== 17) return Promise.resolve(null);
+  if (!vinDetailsCache.has(vin)) vinDetailsCache.set(vin, decodeVehicleFromVin(vin));
+  return vinDetailsCache.get(vin);
 }
 
 const modelsCache = new Map();
@@ -1330,6 +1343,11 @@ function renderBuildTab(v) {
   let selectedKey = null;
   let editing = false;
   let viewer = null;
+  // Body style: an explicit choice wins; otherwise guess from the model name
+  // now and refine from the VIN's Body Class once that decode comes back.
+  let guessedStyle = guessBodyStyle({ make: v.make, model: v.model, trim: v.trim });
+  const effectiveStyle = () => workingLayout.bodyStyle || guessedStyle;
+  const effectiveProfile = () => resolveProfile(effectiveStyle(), workingLayout.wheelbaseIn);
 
   const header = document.createElement('div');
   header.className = 'section-header';
@@ -1367,6 +1385,8 @@ function renderBuildTab(v) {
       </div>
     </div>
     <aside class="build3d-side">
+      <div class="build3d-side-title">Shape</div>
+      <div class="build3d-shape"></div>
       <div class="build3d-side-title">Systems</div>
       <div class="build3d-list"></div>
       <div class="build3d-detail"></div>
@@ -1376,6 +1396,7 @@ function renderBuildTab(v) {
 
   const canvasHost = stageWrap.querySelector('.build3d-canvas');
   const statusEl = stageWrap.querySelector('.build3d-status');
+  const shapeEl = stageWrap.querySelector('.build3d-shape');
   const listEl = stageWrap.querySelector('.build3d-list');
   const detailEl = stageWrap.querySelector('.build3d-detail');
 
@@ -1385,6 +1406,74 @@ function renderBuildTab(v) {
     note.className = 'section-sub build3d-unplaced';
     note.textContent = `${unplaced.length} ${unplaced.length === 1 ? 'part has' : 'parts have'} no place on the car (${UNPLACED_CATEGORIES.join(', ')}) — track ${unplaced.length === 1 ? 'it' : 'them'} on the Parts tab.`;
     wrap.appendChild(note);
+  }
+
+  // --- Shape panel ---
+
+  // The body style is a fact about the vehicle rather than a layout tweak, so
+  // it saves on its own the moment it changes instead of waiting for edit
+  // mode. It's written on top of the last saved layout so that any unsaved
+  // transform edits stay unsaved.
+  async function persistShape(statusNode) {
+    if (!buildLayoutsAvailable) return;
+    const payload = JSON.parse(JSON.stringify(savedLayout));
+    payload.bodyStyle = workingLayout.bodyStyle;
+    payload.wheelbaseIn = workingLayout.wheelbaseIn;
+    const error = await saveBuildLayout(v, payload);
+    if (error) { if (statusNode) statusNode.textContent = error; return; }
+    savedLayout.bodyStyle = payload.bodyStyle;
+    savedLayout.wheelbaseIn = payload.wheelbaseIn;
+    markDirty();
+  }
+
+  function applyShape() {
+    if (viewer) viewer.setProfile(effectiveProfile());
+  }
+
+  function renderShapePanel() {
+    shapeEl.innerHTML = '';
+    const style = BODY_STYLES.find(s => s.key === effectiveStyle());
+
+    const select = document.createElement('select');
+    select.className = 'build3d-style-select';
+    const autoLabel = (BODY_STYLES.find(s => s.key === guessedStyle) || {}).label || 'Sedan';
+    select.innerHTML = `<option value="">Auto — ${escapeHtml(autoLabel)}</option>`
+      + BODY_STYLES.map(s => `<option value="${s.key}"${workingLayout.bodyStyle === s.key ? ' selected' : ''}>${escapeHtml(s.label)}</option>`).join('');
+    shapeEl.appendChild(select);
+
+    const wbRow = document.createElement('label');
+    wbRow.className = 'build3d-wheelbase';
+    wbRow.innerHTML = '<span>Wheelbase</span>';
+    const wbInput = document.createElement('input');
+    wbInput.type = 'number';
+    wbInput.min = '50';
+    wbInput.max = '200';
+    wbInput.step = '0.5';
+    wbInput.placeholder = String(Math.round(resolveProfile(effectiveStyle()).wheelbase / 0.0254));
+    if (workingLayout.wheelbaseIn) wbInput.value = String(workingLayout.wheelbaseIn);
+    wbRow.appendChild(wbInput);
+    wbRow.insertAdjacentHTML('beforeend', '<em>in</em>');
+    shapeEl.appendChild(wbRow);
+
+    const note = document.createElement('div');
+    note.className = 'section-sub build3d-shape-note';
+    const p = effectiveProfile();
+    note.textContent = `${style.label} · ${(p.length * 3.28084).toFixed(1)} ft long · ${(p.wheelbase / 0.0254).toFixed(0)} in wheelbase`;
+    shapeEl.appendChild(note);
+
+    select.addEventListener('change', () => {
+      workingLayout.bodyStyle = select.value || null;
+      applyShape();
+      renderShapePanel();
+      persistShape(shapeEl.querySelector('.build3d-shape-note'));
+    });
+    wbInput.addEventListener('change', () => {
+      const val = Number(wbInput.value);
+      workingLayout.wheelbaseIn = val > 0 ? val : null;
+      applyShape();
+      renderShapePanel();
+      persistShape(shapeEl.querySelector('.build3d-shape-note'));
+    });
   }
 
   // --- Side panel ---
@@ -1642,12 +1731,14 @@ function renderBuildTab(v) {
     viewer.resetCamera();
   });
 
+  renderShapePanel();
   renderComponentList();
   renderDetailPanel();
 
   const token = ++buildViewerToken;
   createBuildViewer(canvasHost, {
     layout: workingLayout,
+    profile: effectiveProfile(),
     onSelect: (key) => { if (token === buildViewerToken) selectComponent(key); },
   }).then(created => {
     if (!created) return;
@@ -1660,6 +1751,22 @@ function renderBuildTab(v) {
     console.error('3D build view failed to load:', err);
     if (token === buildViewerToken) statusEl.textContent = 'Could not start the 3D view — your browser or device may not support WebGL.';
   });
+
+  // The VIN's Body Class beats a guess off the model name, so refine the shape
+  // once the decode lands — but never override a style the user picked.
+  fetchVinDetails(v.vin).then(details => {
+    if (!details || token !== buildViewerToken) return;
+    const refined = guessBodyStyle({ make: v.make, model: v.model, trim: v.trim, bodyClass: details.bodyClass });
+    const changed = refined !== guessedStyle
+      || (details.wheelbaseIn && !workingLayout.wheelbaseIn && !savedLayout.wheelbaseIn);
+    if (!changed) return;
+    guessedStyle = refined;
+    if (!workingLayout.wheelbaseIn && !savedLayout.wheelbaseIn && details.wheelbaseIn) {
+      workingLayout.wheelbaseIn = details.wheelbaseIn;
+    }
+    applyShape();
+    renderShapePanel();
+  }).catch(() => {});
 
   return wrap;
 }

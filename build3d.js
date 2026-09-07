@@ -1,10 +1,15 @@
 // --- 3D build viewer ---
 //
-// Builds a generic vehicle out of primitives, grouped into the systems people
+// Builds the vehicle out of primitives, grouped into the systems people
 // actually track parts for (frame, engine, drivetrain, suspension, brakes,
 // body, interior, electrical, trim). Each group is coloured by how far along
 // that system's parts are, can be exploded away from the car, hidden, and —
 // in edit mode — nudged/resized so the mock-up matches the real vehicle.
+//
+// The shape comes from a body-style profile (sedan, pickup, SUV, …) rather
+// than one fixed car, so a Bronco reads as a short boxy SUV and an F-150 as a
+// long-wheelbase truck with a bed. Every system's geometry is derived from
+// that profile, so the frame, driveshaft and interior stretch with it.
 //
 // three.js is pulled in lazily so the ~600KB only downloads when someone
 // actually opens the 3D tab.
@@ -53,16 +58,158 @@ export function componentState(parts) {
   return moved > 0 ? 'progress' : 'planned';
 }
 
+// --- Body styles ---
+//
+// Dimensions are in metres and describe a representative vehicle of each
+// shape. Front of the car is +Z, up is +Y, the right-hand side is +X.
+//   lift      how far the body sits above the wheels beyond a car's ride height
+//   hood/cabin/rear  centre Z and length of each section of the body
+//   rear      'trunk' (separate boot lid) | 'cargo' (roof carries back) |
+//             'bed' (open pickup bed) | 'none' (roadster tail)
+//   roof      false for open cars
+
+export const BODY_STYLES = [
+  { key: 'sedan', label: 'Sedan', base: {
+    wheelbase: 2.80, length: 4.80, width: 1.83, wheelR: 0.33, lift: 0, bodyH: 0.55, bodyRise: 0.27,
+    hoodZ: 1.35, hoodLen: 1.30, cabinZ: -0.15, cabinLen: 2.00, cabinH: 0.50,
+    roof: true, roofLen: 1.70, roofZ: -0.25, rear: 'trunk', rearZ: -1.75, rearLen: 1.05, rows: 2 } },
+  { key: 'coupe', label: 'Coupe', base: {
+    wheelbase: 2.65, length: 4.55, width: 1.82, wheelR: 0.33, lift: 0, bodyH: 0.52, bodyRise: 0.22,
+    hoodZ: 1.35, hoodLen: 1.45, cabinZ: -0.35, cabinLen: 1.60, cabinH: 0.44,
+    roof: true, roofLen: 1.25, roofZ: -0.45, rear: 'trunk', rearZ: -1.72, rearLen: 1.10, rows: 2 } },
+  { key: 'hatchback', label: 'Hatchback', base: {
+    wheelbase: 2.60, length: 4.20, width: 1.78, wheelR: 0.32, lift: 0, bodyH: 0.55, bodyRise: 0.22,
+    hoodZ: 1.30, hoodLen: 1.05, cabinZ: -0.05, cabinLen: 1.95, cabinH: 0.54,
+    roof: true, roofLen: 1.85, roofZ: -0.15, rear: 'cargo', rearZ: -1.45, rearLen: 0.85, rows: 2 } },
+  { key: 'wagon', label: 'Wagon / estate', base: {
+    wheelbase: 2.80, length: 4.85, width: 1.83, wheelR: 0.33, lift: 0, bodyH: 0.55, bodyRise: 0.23,
+    hoodZ: 1.42, hoodLen: 1.25, cabinZ: -0.10, cabinLen: 2.10, cabinH: 0.55,
+    roof: true, roofLen: 2.90, roofZ: -0.70, rear: 'cargo', rearZ: -1.70, rearLen: 1.10, rows: 2 } },
+  { key: 'convertible', label: 'Convertible / roadster', base: {
+    wheelbase: 2.55, length: 4.35, width: 1.80, wheelR: 0.32, lift: 0, bodyH: 0.52, bodyRise: 0.18,
+    hoodZ: 1.30, hoodLen: 1.40, cabinZ: -0.30, cabinLen: 1.50, cabinH: 0.30,
+    roof: false, roofLen: 0, roofZ: 0, rear: 'trunk', rearZ: -1.62, rearLen: 1.00, rows: 1 } },
+  { key: 'suv', label: 'SUV / 4x4', base: {
+    wheelbase: 2.75, length: 4.60, width: 1.90, wheelR: 0.37, lift: 0.12, bodyH: 0.70, bodyRise: 0.29,
+    hoodZ: 1.55, hoodLen: 1.15, cabinZ: -0.35, cabinLen: 2.55, cabinH: 0.66,
+    roof: true, roofLen: 2.70, roofZ: -0.45, rear: 'cargo', rearZ: -1.80, rearLen: 0.85, rows: 2 } },
+  { key: 'pickup', label: 'Pickup truck', base: {
+    wheelbase: 3.35, length: 5.60, width: 1.98, wheelR: 0.40, lift: 0.14, bodyH: 0.68, bodyRise: 0.30,
+    hoodZ: 1.95, hoodLen: 1.55, cabinZ: 0.35, cabinLen: 1.70, cabinH: 0.72,
+    roof: true, roofLen: 1.60, roofZ: 0.30, rear: 'bed', rearZ: -1.70, rearLen: 2.10, rows: 2 } },
+  { key: 'van', label: 'Van / bus', base: {
+    wheelbase: 3.05, length: 5.20, width: 1.95, wheelR: 0.36, lift: 0.10, bodyH: 0.70, bodyRise: 0.30,
+    hoodZ: 2.25, hoodLen: 0.55, cabinZ: -0.15, cabinLen: 4.10, cabinH: 1.00,
+    roof: true, roofLen: 4.30, roofZ: -0.25, rear: 'cargo', rearZ: -2.35, rearLen: 0.30, rows: 2 } },
+];
+
+export const DEFAULT_BODY_STYLE = 'sedan';
+
+// How far the top of the air cleaner sits above the engine's centre — used to
+// tuck the whole assembly under the hood line. Keep in step with engine().
+const ENGINE_TOP_OFFSET = 0.53;
+
+// Turns a body style key (plus an optional real wheelbase in inches) into the
+// derived measurements every geometry builder works from.
+export function resolveProfile(styleKey, wheelbaseIn) {
+  const style = BODY_STYLES.find(s => s.key === styleKey) || BODY_STYLES.find(s => s.key === DEFAULT_BODY_STYLE);
+  const p = { ...style.base, style: style.key, styleLabel: style.label };
+
+  // A known wheelbase stretches the whole car around it, keeping the
+  // overhangs proportional rather than leaving the body the wrong length.
+  const wb = Number(wheelbaseIn) > 0 ? Number(wheelbaseIn) * 0.0254 : 0;
+  if (wb > 0) {
+    const k = Math.max(0.6, Math.min(1.7, wb / p.wheelbase));
+    ['length', 'hoodZ', 'hoodLen', 'cabinZ', 'cabinLen', 'roofLen', 'roofZ', 'rearZ', 'rearLen'].forEach(f => { p[f] *= k; });
+    p.wheelbase *= k;
+    p.wheelbaseScale = k;
+  }
+
+  p.axleF = p.wheelbase / 2;
+  p.axleR = -p.wheelbase / 2;
+  p.wheelX = p.width / 2 - 0.14;
+  p.frameY = p.wheelR + 0.02 + p.lift;
+  p.bodyY = p.frameY + p.bodyRise;
+  p.bodyTop = p.bodyY + p.bodyH / 2;
+  p.roofY = p.bodyTop + p.cabinH + 0.04;
+  p.hoodTop = p.bodyTop + 0.175;
+  p.engineZ = p.axleF - 0.35;
+  // Drop the engine in so its air cleaner just clears the underside of the
+  // hood, but never so low that the sump ends up on the floor.
+  p.engineY = Math.max(p.frameY + 0.15, p.hoodTop - ENGINE_TOP_OFFSET);
+  // Keep the radiator and fan behind the nose of the bodywork.
+  p.radiatorZ = Math.min(p.axleF + 0.55, p.length * 0.45 - 0.30);
+  p.noseZ = p.length / 2;
+  p.tailZ = -p.length / 2;
+  p.floorY = p.bodyTop - 0.35;
+  // Ceiling the interior has to stay under: the roof on a closed car, or just
+  // above the screen line on an open one.
+  p.interiorTop = p.roof ? p.roofY - 0.02 : p.bodyTop + p.cabinH + 0.12;
+  return p;
+}
+
+// --- Guessing the body style ---
+
+// NHTSA's vPIC "Body Class" values, which app.js can pull from a 17-digit VIN.
+const BODY_CLASS_MAP = [
+  [/pickup|truck-tractor|crew cab|cab chassis/i, 'pickup'],
+  [/sport utility|multi-purpose|mpv|suv/i, 'suv'],
+  [/van|minivan|bus/i, 'van'],
+  [/convertible|roadster|cabriolet|spyder|targa/i, 'convertible'],
+  [/wagon|estate/i, 'wagon'],
+  [/hatchback|liftback/i, 'hatchback'],
+  [/coupe|fastback/i, 'coupe'],
+  [/sedan|saloon|limousine/i, 'sedan'],
+];
+export function bodyClassToStyle(bodyClass) {
+  if (!bodyClass) return null;
+  const hit = BODY_CLASS_MAP.find(([re]) => re.test(bodyClass));
+  return hit ? hit[1] : null;
+}
+
+// Fallback for vehicles with no decodable VIN — pre-1981 VINs aren't in vPIC
+// at all, which covers most of what gets restored.
+const MODEL_HINTS = [
+  [/\b(f-?[1-6][05]0|f-?series|silverado|sierra|ram\b|c\/?k ?1[05]00|[ck]-?10\b|d-?[15]00|ranger|tacoma|tundra|colorado|canyon|frontier|titan|hilux|dakota|avalanche|ridgeline|el ?camino|ranchero|apache|3100|pickup|truck)\b/i, 'pickup'],
+  [/\b(bronco|blazer|jimmy|wrangler|cherokee|grand ?wagoneer|wagoneer|scout|land ?cruiser|fj ?(40|55|60|62|80)|defender|range ?rover|discovery|4runner|pathfinder|explorer|expedition|tahoe|suburban|yukon|escalade|durango|montero|trooper|samurai|sidekick|xterra|highlander|pilot|rav4|cr-?v|suv)\b/i, 'suv'],
+  [/\b(vanagon|transporter|microbus|kombi|westfalia|econoline|e-?[13]50|savana|express|astro|caravan|voyager|odyssey|sienna|sprinter|transit|van|bus)\b/i, 'van'],
+  [/\b(convertible|cabriolet|roadster|spider|spyder|miata|mx-?5|boxster|z3|z4|speedster|targa)\b/i, 'convertible'],
+  [/\b(wagon|estate|avant|touring|shooting ?brake|nomad|country ?squire|vista ?cruiser)\b/i, 'wagon'],
+  [/\b(golf|gti|rabbit|civic ?si|hatch|hatchback|mini ?cooper|fiesta st|focus ?st|wrx ?hatch|veloster|yaris|fit)\b/i, 'hatchback'],
+  [/\b(mustang|camaro|corvette|challenger|charger ?r\/?t|firebird|trans ?am|barracuda|cuda|chevelle|gto|340|442|nova|impala ?ss|celica|supra|rx-?7|240sz?|280z|300zx|350z|370z|s2000|integra|prelude|coupe|fastback|gt-?r|skyline|911|cayman|m3|m4)\b/i, 'coupe'],
+];
+export function guessBodyStyle({ make, model, trim, bodyClass } = {}) {
+  const fromVin = bodyClassToStyle(bodyClass);
+  if (fromVin) return fromVin;
+  const text = [make, model, trim].filter(Boolean).join(' ');
+  if (!text.trim()) return DEFAULT_BODY_STYLE;
+  const hit = MODEL_HINTS.find(([re]) => re.test(text));
+  return hit ? hit[1] : DEFAULT_BODY_STYLE;
+}
+
 // --- Layout persistence shape ---
-// { version: 1, components: { engine: { pos:[x,y,z], scale:[x,y,z], rotY:deg, hidden:bool } } }
+// {
+//   version: 1,
+//   bodyStyle: 'suv' | null,      // null = fall back to the guess
+//   wheelbaseIn: 92 | null,
+//   components: { engine: { pos:[x,y,z], scale:[x,y,z], rotY:deg, hidden:bool } }
+// }
 
 export const DEFAULT_TRANSFORM = { pos: [0, 0, 0], scale: [1, 1, 1], rotY: 0, hidden: false };
 
 export function normalizeLayout(raw) {
-  const layout = { version: 1, components: {} };
-  const src = (raw && raw.components) || {};
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const styleKey = BODY_STYLES.some(s => s.key === src.bodyStyle) ? src.bodyStyle : null;
+  const wb = Number(src.wheelbaseIn);
+  const layout = {
+    version: 1,
+    bodyStyle: styleKey,
+    wheelbaseIn: Number.isFinite(wb) && wb > 0 ? wb : null,
+    components: {},
+  };
+  const components = src.components || {};
   BUILD_COMPONENTS.forEach(({ key }) => {
-    const t = src[key] || {};
+    const t = components[key] || {};
     layout.components[key] = {
       pos: num3(t.pos, DEFAULT_TRANSFORM.pos),
       scale: num3(t.scale, DEFAULT_TRANSFORM.scale),
@@ -92,6 +239,8 @@ export async function createBuildViewer(container, options = {}) {
 
   const onSelect = options.onSelect || (() => {});
   let layout = normalizeLayout(options.layout);
+  let profile = options.profile || resolveProfile(DEFAULT_BODY_STYLE);
+  let states = {};
   let explode = 0;
   let selectedKey = null;
   let disposed = false;
@@ -141,11 +290,24 @@ export async function createBuildViewer(container, options = {}) {
   const carRoot = new THREE.Group();
   scene.add(carRoot);
 
-  const components = buildCar(THREE, carRoot);
-  const pickable = [];
-  components.forEach(c => c.group.traverse(o => { if (o.isMesh) pickable.push(o); }));
+  let components = [];
+  let pickable = [];
+  function rebuild() {
+    components.forEach(c => {
+      carRoot.remove(c.group);
+      c.group.traverse(obj => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) [].concat(obj.material).forEach(m => m.dispose());
+      });
+    });
+    components = buildCar(THREE, carRoot, profile);
+    pickable = [];
+    components.forEach(c => c.group.traverse(o => { if (o.isMesh) pickable.push(o); }));
+    applyTransforms();
+    applyStates();
+  }
 
-  // --- Camera controls (orbit / pan-free zoom, pointer + touch) ---
+  // --- Camera controls (orbit / zoom, pointer + touch) ---
   const target = new THREE.Vector3(0, 0.85, 0);
   const home = { yaw: -0.75, pitch: 0.32, distance: 10.5 };
   let yaw = home.yaw;
@@ -155,7 +317,7 @@ export async function createBuildViewer(container, options = {}) {
   function applyCamera() {
     const clampedPitch = Math.max(-0.25, Math.min(1.35, pitch));
     pitch = clampedPitch;
-    distance = Math.max(4, Math.min(24, distance));
+    distance = Math.max(4, Math.min(30, distance));
     camera.position.set(
       target.x + distance * Math.cos(clampedPitch) * Math.sin(yaw),
       target.y + distance * Math.sin(clampedPitch),
@@ -163,6 +325,17 @@ export async function createBuildViewer(container, options = {}) {
     );
     camera.lookAt(target);
   }
+
+  // Long vehicles need the camera further back to stay in frame.
+  function homeDistanceFor(p) {
+    return Math.max(8, p.length * 2.2);
+  }
+  function homeTargetFor(p) {
+    return new THREE.Vector3(0, p.bodyTop * 0.7, 0);
+  }
+  home.distance = homeDistanceFor(profile);
+  distance = home.distance;
+  target.copy(homeTargetFor(profile));
   applyCamera();
 
   const pointers = new Map();
@@ -264,7 +437,15 @@ export async function createBuildViewer(container, options = {}) {
       c.group.visible = !t.hidden;
     });
   }
-  applyTransforms();
+  function applyStates() {
+    components.forEach(c => {
+      const state = BUILD_STATES[states[c.key]] || BUILD_STATES.empty;
+      c.setColor(state.color);
+      c.setSelected(c.key === selectedKey);
+    });
+  }
+
+  rebuild();
 
   function animate() {
     if (disposed) return;
@@ -275,11 +456,8 @@ export async function createBuildViewer(container, options = {}) {
 
   const api = {
     setStates(statesByKey) {
-      components.forEach(c => {
-        const state = BUILD_STATES[statesByKey[c.key]] || BUILD_STATES.empty;
-        c.setColor(state.color);
-      });
-      api.select(selectedKey);
+      states = statesByKey || {};
+      applyStates();
     },
     select(key) {
       selectedKey = key;
@@ -298,13 +476,22 @@ export async function createBuildViewer(container, options = {}) {
       Object.assign(layout.components[key], transform);
       applyTransforms();
     },
+    // Swaps in a different body shape without tearing down the scene, so the
+    // camera, selection and any layout edits survive the change.
+    setProfile(next) {
+      profile = next || resolveProfile(DEFAULT_BODY_STYLE);
+      rebuild();
+      home.distance = homeDistanceFor(profile);
+      return profile;
+    },
+    getProfile() { return profile; },
     getLayout() {
       return JSON.parse(JSON.stringify(layout));
     },
     resetCamera() {
       yaw = home.yaw;
       pitch = home.pitch;
-      distance = home.distance;
+      distance = homeDistanceFor(profile);
       applyCamera();
     },
     focus(key) {
@@ -317,7 +504,7 @@ export async function createBuildViewer(container, options = {}) {
       applyCamera();
     },
     resetTarget() {
-      target.set(0, 0.85, 0);
+      target.copy(homeTargetFor(profile));
       applyCamera();
     },
     dispose() {
@@ -340,16 +527,8 @@ export async function createBuildViewer(container, options = {}) {
 }
 
 // --- Geometry ---
-//
-// Rough production-car proportions in metres: 4.5m long, 1.85m wide, wheels on
-// a 2.8m wheelbase. Front of the car is +Z, up is +Y, right side is +X.
 
-const WHEEL_X = 0.82;
-const AXLE_F = 1.4;
-const AXLE_R = -1.4;
-const WHEEL_R = 0.34;
-
-function buildCar(THREE, root) {
+function buildCar(THREE, root, profile) {
   return BUILD_COMPONENTS.map(def => {
     const group = new THREE.Group();
     group.name = def.key;
@@ -366,6 +545,7 @@ function buildCar(THREE, root) {
 
     const ctx = {
       THREE,
+      p: profile,
       group,
       materials,
       add(geometry, shade, position, rotation) {
@@ -379,15 +559,15 @@ function buildCar(THREE, root) {
         return mesh;
       },
       box(w, h, d, shade, position, rotation) {
-        return ctx.add(new THREE.BoxGeometry(w, h, d), shade, position, rotation);
+        return ctx.add(new THREE.BoxGeometry(Math.abs(w) || 0.01, Math.abs(h) || 0.01, Math.abs(d) || 0.01), shade, position, rotation);
       },
       cyl(radius, height, shade, position, rotation, radiusBottom) {
-        return ctx.add(new THREE.CylinderGeometry(radius, radiusBottom == null ? radius : radiusBottom, height, 24), shade, position, rotation);
+        return ctx.add(new THREE.CylinderGeometry(radius, radiusBottom == null ? radius : radiusBottom, Math.abs(height) || 0.01, 24), shade, position, rotation);
       },
       // Mirrors a builder across the car's centreline — most of the car is
       // symmetric, so this halves the geometry code.
       pair(fn) { fn(1); fn(-1); },
-      corners(fn) { [AXLE_F, AXLE_R].forEach(z => { fn(1, z); fn(-1, z); }); },
+      corners(fn) { [profile.axleF, profile.axleR].forEach(z => { fn(1, z); fn(-1, z); }); },
     };
 
     GEOMETRY_BUILDERS[def.key](ctx);
@@ -414,114 +594,179 @@ function buildCar(THREE, root) {
 
 const GEOMETRY_BUILDERS = {
   frame(c) {
-    // Two full-length rails plus crossmembers and the firewall bulkhead.
-    c.pair(side => c.box(0.13, 0.16, 4.15, 'base', [side * 0.58, 0.36, -0.05]));
-    [-1.75, -0.85, 0.35, 1.35, 1.95].forEach(z => c.box(1.2, 0.1, 0.13, 'dark', [0, 0.36, z]));
-    c.box(1.55, 0.55, 0.06, 'dark', [0, 0.62, 0.25]);
-    // Kick-ups over the rear axle so the rails clear the diff.
-    c.pair(side => c.box(0.13, 0.3, 0.5, 'dark', [side * 0.58, 0.55, -1.4]));
+    const p = c.p;
+    const railLen = p.length * 0.86;
+    const railX = p.width * 0.31;
+    c.pair(side => c.box(0.13, 0.16, railLen, 'base', [side * railX, p.frameY, 0]));
+    [-0.42, -0.18, 0.12, 0.34].forEach(f => c.box(railX * 1.9, 0.1, 0.13, 'dark', [0, p.frameY, f * railLen]));
+    // Firewall bulkhead, just behind the engine bay.
+    c.box(p.width * 0.82, 0.55, 0.06, 'dark', [0, p.frameY + 0.26, p.engineZ - 0.75]);
+    // Kick-ups so the rails clear the rear axle.
+    c.pair(side => c.box(0.13, 0.3, 0.5, 'dark', [side * railX, p.frameY + 0.19, p.axleR]));
     // Engine and transmission mounts.
-    c.pair(side => c.box(0.16, 0.22, 0.16, 'light', [side * 0.42, 0.52, 1.1]));
-    c.box(0.5, 0.1, 0.16, 'light', [0, 0.42, -0.1]);
+    c.pair(side => c.box(0.16, 0.22, 0.16, 'light', [side * 0.42, p.frameY + 0.16, p.engineZ + 0.05]));
+    c.box(0.5, 0.1, 0.16, 'light', [0, p.frameY + 0.06, p.engineZ - 1.15]);
   },
 
   engine(c) {
-    c.box(0.7, 0.6, 0.78, 'base', [0, 0.88, 1.05]);           // block
-    c.box(0.74, 0.16, 0.72, 'light', [0, 1.24, 1.05]);        // head
-    c.box(0.5, 0.14, 0.6, 'light', [0, 1.38, 1.05]);          // valve cover
-    c.box(0.44, 0.2, 0.5, 'dark', [0, 1.55, 1.05]);           // intake / air cleaner
-    c.box(0.62, 0.2, 0.6, 'dark', [0, 0.5, 1.0]);             // oil pan
-    c.cyl(0.16, 0.1, 'light', [0, 0.88, 1.5], [0, 0, Math.PI / 2]); // crank pulley
-    c.box(0.9, 0.6, 0.12, 'dark', [0, 0.95, 1.95]);           // radiator
-    c.cyl(0.22, 0.12, 'light', [0, 0.95, 1.82], [0, 0, Math.PI / 2]); // fan
-    // Exhaust manifolds running back along each side of the block.
-    c.pair(side => c.cyl(0.07, 0.75, 'dark', [side * 0.42, 0.72, 0.95], [Math.PI / 2, 0, 0]));
+    const p = c.p, y = p.engineY, z = p.engineZ;
+    c.box(0.70, 0.48, 0.78, 'base', [0, y, z]);               // block
+    c.box(0.74, 0.12, 0.72, 'light', [0, y + 0.30, z]);       // head
+    c.box(0.50, 0.10, 0.60, 'light', [0, y + 0.41, z]);       // valve cover
+    c.box(0.44, 0.14, 0.50, 'dark', [0, y + 0.46, z]);        // intake / air cleaner
+    c.box(0.62, 0.16, 0.60, 'dark', [0, y - 0.30, z - 0.05]); // oil pan
+    c.cyl(0.16, 0.10, 'light', [0, y, z + 0.45], [0, 0, Math.PI / 2]); // crank pulley
+    c.box(0.90, 0.50, 0.12, 'dark', [0, y + 0.06, p.radiatorZ]);       // radiator
+    c.cyl(0.20, 0.12, 'light', [0, y + 0.06, p.radiatorZ - 0.13], [0, 0, Math.PI / 2]); // fan
+    c.pair(side => c.cyl(0.07, 0.75, 'dark', [side * 0.42, y - 0.14, z - 0.10], [Math.PI / 2, 0, 0])); // manifolds
   },
 
   drivetrain(c) {
-    c.box(0.46, 0.42, 0.75, 'base', [0, 0.72, 0.35]);         // bellhousing
-    c.box(0.34, 0.32, 0.62, 'base', [0, 0.66, -0.2]);         // trans case
-    c.cyl(0.07, 1.5, 'light', [0, 0.5, -1.05], [Math.PI / 2, 0, 0]); // driveshaft
-    c.cyl(0.1, 0.12, 'dark', [0, 0.5, -0.5], [Math.PI / 2, 0, 0]);   // u-joint
-    c.cyl(0.26, 0.3, 'base', [0, 0.42, AXLE_R], [Math.PI / 2, 0, 0]); // differential
-    c.pair(side => c.cyl(0.07, 0.62, 'dark', [side * 0.5, 0.42, AXLE_R], [0, 0, Math.PI / 2])); // axle shafts
-    c.box(0.3, 0.16, 0.3, 'light', [0, 0.62, 0.72]);          // clutch / flexplate housing
+    const p = c.p, y = p.frameY;
+    c.box(0.46, 0.42, 0.75, 'base', [0, y + 0.36, p.engineZ - 0.70]);  // bellhousing
+    c.box(0.34, 0.32, 0.62, 'base', [0, y + 0.30, p.engineZ - 1.25]);  // trans case
+    c.box(0.30, 0.16, 0.30, 'light', [0, y + 0.26, p.engineZ - 0.40]); // flexplate housing
+    // Driveshaft spans whatever gap the wheelbase leaves between the
+    // transmission tail and the rear axle.
+    const shaftFront = p.engineZ - 1.55;
+    const shaftLen = Math.max(0.3, shaftFront - p.axleR);
+    c.cyl(0.07, shaftLen, 'light', [0, y + 0.14, (shaftFront + p.axleR) / 2], [Math.PI / 2, 0, 0]);
+    c.cyl(0.10, 0.12, 'dark', [0, y + 0.14, shaftFront], [Math.PI / 2, 0, 0]);  // u-joint
+    c.cyl(0.26, 0.30, 'base', [0, y + 0.06, p.axleR], [Math.PI / 2, 0, 0]);     // differential
+    const axleLen = Math.max(0.2, p.wheelX - 0.15);
+    c.pair(side => c.cyl(0.07, axleLen, 'dark', [side * (0.15 + axleLen / 2), y + 0.06, p.axleR], [0, 0, Math.PI / 2]));
   },
 
   suspension(c) {
+    const p = c.p;
     c.corners((side, z) => {
-      c.cyl(WHEEL_R, 0.26, 'dark', [side * WHEEL_X, WHEEL_R, z], [0, 0, Math.PI / 2]);          // tyre
-      c.cyl(WHEEL_R * 0.62, 0.28, 'light', [side * WHEEL_X, WHEEL_R, z], [0, 0, Math.PI / 2]);  // rim
-      c.cyl(0.12, 0.42, 'base', [side * 0.6, 0.68, z]);                                          // coil spring
-      c.cyl(0.05, 0.5, 'light', [side * 0.6, 0.72, z]);                                          // shock rod
-      c.box(0.5, 0.08, 0.14, 'base', [side * 0.55, 0.35, z]);                                    // lower control arm
-      c.box(0.42, 0.07, 0.12, 'base', [side * 0.5, 0.62, z]);                                    // upper control arm
+      c.cyl(p.wheelR, 0.26, 'dark', [side * p.wheelX, p.wheelR, z], [0, 0, Math.PI / 2]);          // tyre
+      c.cyl(p.wheelR * 0.62, 0.28, 'light', [side * p.wheelX, p.wheelR, z], [0, 0, Math.PI / 2]);  // rim
+      c.cyl(0.12, 0.42, 'base', [side * (p.wheelX - 0.22), p.wheelR + 0.34 + p.lift, z]);          // coil spring
+      c.cyl(0.05, 0.50, 'light', [side * (p.wheelX - 0.22), p.wheelR + 0.38 + p.lift, z]);         // shock rod
+      c.box(0.50, 0.08, 0.14, 'base', [side * (p.wheelX - 0.27), p.wheelR + 0.01, z]);             // lower arm
+      c.box(0.42, 0.07, 0.12, 'base', [side * (p.wheelX - 0.32), p.wheelR + 0.26, z]);             // upper arm
     });
-    c.box(1.5, 0.08, 0.1, 'base', [0, 0.55, AXLE_F - 0.2]);   // steering rack
-    c.box(1.45, 0.07, 0.08, 'dark', [0, 0.3, AXLE_F + 0.25]); // front sway bar
-    c.box(1.45, 0.07, 0.08, 'dark', [0, 0.3, AXLE_R - 0.25]); // rear sway bar
-    c.cyl(0.05, 0.55, 'light', [0.2, 0.75, AXLE_F - 0.35], [0, 0, Math.PI / 3]); // steering shaft
+    c.box(p.width * 0.82, 0.08, 0.10, 'base', [0, p.frameY + 0.19, p.axleF - 0.20]);  // steering rack
+    c.box(p.width * 0.79, 0.07, 0.08, 'dark', [0, p.frameY - 0.06, p.axleF + 0.25]);  // front sway bar
+    c.box(p.width * 0.79, 0.07, 0.08, 'dark', [0, p.frameY - 0.06, p.axleR - 0.25]);  // rear sway bar
+    c.cyl(0.05, 0.55, 'light', [0.20, p.frameY + 0.39, p.axleF - 0.35], [0, 0, Math.PI / 3]); // steering shaft
   },
 
   brakes(c) {
+    const p = c.p;
     c.corners((side, z) => {
-      c.cyl(0.27, 0.04, 'light', [side * (WHEEL_X - 0.05), WHEEL_R, z], [0, 0, Math.PI / 2]); // rotor
-      c.box(0.1, 0.2, 0.16, 'base', [side * (WHEEL_X - 0.12), WHEEL_R + 0.16, z]);            // caliper
-      c.cyl(0.02, 0.4, 'dark', [side * 0.6, WHEEL_R + 0.25, z], [0, 0, Math.PI / 2.4]);       // flex line
+      c.cyl(p.wheelR * 0.8, 0.04, 'light', [side * (p.wheelX - 0.05), p.wheelR, z], [0, 0, Math.PI / 2]); // rotor
+      c.box(0.10, 0.20, 0.16, 'base', [side * (p.wheelX - 0.12), p.wheelR + 0.16, z]);                    // caliper
+      c.cyl(0.02, 0.40, 'dark', [side * (p.wheelX - 0.22), p.wheelR + 0.25, z], [0, 0, Math.PI / 2.4]);   // flex line
     });
-    c.box(0.26, 0.16, 0.2, 'base', [-0.35, 0.78, 0.42]);   // master cylinder
-    c.cyl(0.14, 0.22, 'dark', [-0.35, 0.78, 0.62], [Math.PI / 2, 0, 0]); // booster
-    c.pair(side => c.cyl(0.02, 2.6, 'dark', [side * 0.66, 0.3, -0.2], [Math.PI / 2, 0, 0])); // hard lines
+    c.box(0.26, 0.16, 0.20, 'base', [-0.35, p.frameY + 0.42, p.engineZ - 0.63]);                     // master cylinder
+    c.cyl(0.14, 0.22, 'dark', [-0.35, p.frameY + 0.42, p.engineZ - 0.43], [Math.PI / 2, 0, 0]);      // booster
+    const lineLen = Math.max(0.5, p.wheelbase - 0.2);
+    c.pair(side => c.cyl(0.02, lineLen, 'dark', [side * (p.width * 0.36), p.frameY - 0.06, 0], [Math.PI / 2, 0, 0])); // hard lines
   },
 
   electrical(c) {
-    c.box(0.34, 0.26, 0.22, 'base', [0.6, 0.92, 1.7]);       // battery
-    c.cyl(0.14, 0.22, 'light', [0.5, 1.12, 1.25], [0, 0, Math.PI / 2]); // alternator
-    c.cyl(0.11, 0.3, 'dark', [-0.5, 0.7, 0.9], [0, 0, Math.PI / 2]);    // starter
-    c.box(0.2, 0.18, 0.12, 'base', [-0.62, 0.85, 0.45]);     // fuse box
-    // Wiring loom down the driver's rail and out to the tail.
-    c.cyl(0.035, 2.9, 'dark', [-0.66, 0.47, 0.1], [Math.PI / 2, 0, 0]);
-    c.cyl(0.03, 1.2, 'dark', [0, 0.47, -1.9], [Math.PI / 2, 0, 0]);
-    c.box(0.3, 0.14, 0.1, 'light', [0, 1.28, 0.35]);         // coil / ignition module
-    c.pair(side => c.box(0.12, 0.1, 0.1, 'light', [side * 0.75, 1.05, 1.95])); // headlight connectors
+    const p = c.p, y = p.engineY, z = p.engineZ;
+    c.box(0.34, 0.26, 0.22, 'base', [p.width * 0.32, y + 0.04, z + 0.65]);      // battery
+    c.cyl(0.14, 0.22, 'light', [0.50, y + 0.24, z + 0.20], [0, 0, Math.PI / 2]); // alternator
+    c.cyl(0.11, 0.30, 'dark', [-0.50, y - 0.18, z - 0.15], [0, 0, Math.PI / 2]); // starter
+    c.box(0.20, 0.18, 0.12, 'base', [-p.width * 0.34, y - 0.03, z - 0.60]);     // fuse box
+    c.box(0.30, 0.14, 0.10, 'light', [0, y + 0.40, z - 0.70]);                  // coil / ignition
+    // Wiring loom down the driver's rail and out to the tail lights.
+    const loomLen = Math.max(0.6, p.wheelbase);
+    c.cyl(0.035, loomLen, 'dark', [-p.width * 0.36, p.frameY + 0.11, 0], [Math.PI / 2, 0, 0]);
+    const tailRun = Math.max(0.4, Math.abs(p.tailZ - p.axleR));
+    c.cyl(0.03, tailRun, 'dark', [0, p.frameY + 0.11, (p.tailZ + p.axleR) / 2], [Math.PI / 2, 0, 0]);
+    c.pair(side => c.box(0.12, 0.10, 0.10, 'light', [side * (p.width * 0.36), y + 0.17, p.radiatorZ - 0.05]));
   },
 
   interior(c) {
-    c.box(1.6, 0.05, 1.9, 'dark', [0, 0.78, -0.15]);         // floor
-    c.pair(side => {
-      c.box(0.5, 0.12, 0.5, 'base', [side * 0.42, 0.98, -0.25]);  // seat base
-      c.box(0.5, 0.62, 0.12, 'base', [side * 0.42, 1.3, -0.52]);  // seat back
-      c.box(0.28, 0.2, 0.12, 'light', [side * 0.42, 1.68, -0.5]); // headrest
-    });
-    c.box(1.55, 0.24, 0.3, 'light', [0, 1.15, 0.65]);        // dash
-    c.box(0.36, 0.14, 0.2, 'base', [0, 1.22, 0.5]);          // centre stack
-    c.add(new c.THREE.TorusGeometry(0.17, 0.028, 12, 28), 'base', [0.38, 1.2, 0.38], [Math.PI / 2.6, 0, 0]); // steering wheel
-    c.box(0.3, 0.14, 1.3, 'dark', [0, 0.9, -0.25]);          // console
-    c.box(1.5, 0.5, 0.1, 'dark', [0, 1.15, -1.15]);          // rear bulkhead
+    const p = c.p;
+    const cabFront = p.cabinZ + p.cabinLen / 2;
+    const cabBack = p.cabinZ - p.cabinLen / 2;
+    c.box(p.width * 0.86, 0.05, p.cabinLen, 'dark', [0, p.floorY, p.cabinZ]);   // floor
+    c.box(p.width * 0.84, 0.24, 0.30, 'light', [0, p.floorY + 0.37, cabFront - 0.35]); // dash
+    c.box(0.36, 0.14, 0.20, 'base', [0, p.floorY + 0.44, cabFront - 0.50]);            // centre stack
+    c.add(new c.THREE.TorusGeometry(0.17, 0.028, 12, 28), 'base',
+      [0.38, p.floorY + 0.42, cabFront - 0.62], [Math.PI / 2.6, 0, 0]);                // steering wheel
+
+    // Seats are sized to whatever headroom the cabin actually has, so a
+    // roadster's headrests don't stand up where its roof would have been.
+    const seatY = p.floorY + 0.20;
+    const backH = Math.min(0.62, Math.max(0.25, p.interiorTop - 0.16 - (seatY + 0.06)));
+    const backY = seatY + 0.06 + backH / 2;
+    const headY = Math.min(backY + backH / 2 + 0.10, p.interiorTop - 0.10);
+
+    // Rows spaced back from the dash; a roadster only gets the front pair.
+    const rowSpacing = Math.min(0.95, p.cabinLen * 0.42);
+    for (let row = 0; row < p.rows; row++) {
+      const z = cabFront - 1.05 - row * rowSpacing;
+      if (z < cabBack + 0.15) break;
+      c.pair(side => {
+        c.box(0.50, 0.12, 0.50, 'base', [side * (p.width * 0.23), seatY, z]);
+        c.box(0.50, backH, 0.12, 'base', [side * (p.width * 0.23), backY, z - 0.27]);
+        c.box(0.28, 0.20, 0.12, 'light', [side * (p.width * 0.23), headY, z - 0.25]);
+      });
+    }
+    c.box(0.30, 0.14, Math.min(1.3, p.cabinLen * 0.6), 'dark', [0, p.floorY + 0.12, p.cabinZ]); // console
+    c.box(p.width * 0.80, 0.50, 0.10, 'dark', [0, p.floorY + 0.37, cabBack + 0.05]);            // bulkhead
   },
 
   body(c) {
-    c.box(1.86, 0.55, 4.3, 'base', [0, 0.85, 0]);            // lower body
-    c.box(1.72, 0.2, 1.3, 'base', [0, 1.2, 1.35]);           // hood
-    c.box(1.72, 0.2, 1.05, 'base', [0, 1.2, -1.6]);          // deck lid
-    c.box(1.68, 0.62, 2.0, 'base', [0, 1.42, -0.15]);        // cabin
-    c.box(1.5, 0.08, 1.7, 'light', [0, 1.76, -0.25]);        // roof
-    c.pair(side => c.box(0.06, 0.5, 1.55, 'glass', [side * 0.84, 1.46, -0.25])); // side glass
-    c.box(1.45, 0.5, 0.08, 'glass', [0, 1.46, 0.82], [-0.5, 0, 0]);              // windscreen
-    c.box(1.4, 0.45, 0.08, 'glass', [0, 1.46, -1.25], [0.45, 0, 0]);             // rear glass
-    // Fender arches sitting proud of the body at each wheel.
-    c.corners((side, z) => c.box(0.12, 0.5, 0.95, 'light', [side * 0.93, 0.78, z]));
+    const p = c.p;
+    const cabFront = p.cabinZ + p.cabinLen / 2;
+    const cabBack = p.cabinZ - p.cabinLen / 2;
+    c.box(p.width, p.bodyH, p.length * 0.90, 'base', [0, p.bodyY, 0]);                 // lower body
+    c.box(p.width * 0.94, 0.20, p.hoodLen, 'base', [0, p.bodyTop + 0.075, p.hoodZ]);   // hood
+    c.box(p.width * 0.92, p.cabinH, p.cabinLen, 'base', [0, p.bodyTop + p.cabinH / 2, p.cabinZ]); // cabin
+
+    if (p.roof) {
+      c.box(p.width * 0.82, 0.08, p.roofLen, 'light', [0, p.roofY, p.roofZ]);
+      c.pair(side => c.box(0.06, p.cabinH * 0.78, p.cabinLen * 0.78, 'glass',
+        [side * (p.width * 0.46), p.bodyTop + p.cabinH * 0.58, p.cabinZ]));            // side glass
+      c.box(p.width * 0.78, p.cabinH * 0.78, 0.08, 'glass', [0, p.bodyTop + p.cabinH * 0.58, cabFront], [-0.45, 0, 0]);
+      c.box(p.width * 0.76, p.cabinH * 0.72, 0.08, 'glass', [0, p.bodyTop + p.cabinH * 0.58, cabBack], [0.45, 0, 0]);
+    } else {
+      // Open car: a low screen and a roll hoop instead of a roof.
+      const screenY = p.bodyTop + p.cabinH * 0.5 + 0.12;
+      c.box(p.width * 0.72, 0.30, 0.06, 'glass', [0, screenY, cabFront], [-0.35, 0, 0]);
+      c.pair(side => c.box(0.10, 0.30, 0.10, 'light', [side * (p.width * 0.26), screenY, cabBack + 0.1]));
+    }
+
+    if (p.rear === 'trunk') {
+      c.box(p.width * 0.94, 0.20, p.rearLen, 'base', [0, p.bodyTop + 0.075, p.rearZ]);
+    } else if (p.rear === 'cargo') {
+      // Roof carries back over the load area; add the tailgate panel.
+      c.box(p.width * 0.92, p.cabinH, p.rearLen, 'base', [0, p.bodyTop + p.cabinH / 2, p.rearZ]);
+      c.box(p.width * 0.88, p.cabinH * 0.6, 0.08, 'glass', [0, p.bodyTop + p.cabinH * 0.65, p.rearZ - p.rearLen / 2]);
+    } else if (p.rear === 'bed') {
+      const bedY = p.bodyTop;
+      const wallH = 0.44;
+      c.box(p.width * 0.94, 0.08, p.rearLen, 'dark', [0, bedY + 0.04, p.rearZ]);                       // bed floor
+      c.pair(side => c.box(0.09, wallH, p.rearLen, 'base', [side * (p.width * 0.45), bedY + wallH / 2, p.rearZ])); // bed sides
+      c.box(p.width * 0.92, wallH, 0.09, 'base', [0, bedY + wallH / 2, p.rearZ - p.rearLen / 2]);       // tailgate
+      c.box(p.width * 0.92, wallH, 0.09, 'base', [0, bedY + wallH / 2, p.rearZ + p.rearLen / 2]);       // bed front wall
+    }
+
+    // Fender arches standing proud of the body over each wheel.
+    c.corners((side, z) => c.box(0.12, p.bodyH * 0.9, p.wheelR * 2.8, 'light', [side * (p.width * 0.5), p.bodyY - 0.07, z]));
   },
 
   trim(c) {
-    c.box(1.9, 0.24, 0.2, 'base', [0, 0.72, 2.2]);           // front bumper
-    c.box(1.9, 0.24, 0.2, 'base', [0, 0.72, -2.2]);          // rear bumper
-    c.box(1.3, 0.28, 0.1, 'dark', [0, 1.0, 2.16]);           // grille
-    c.pair(side => c.cyl(0.16, 0.1, 'light', [side * 0.66, 1.05, 2.18], [Math.PI / 2, 0, 0])); // headlights
-    c.pair(side => c.box(0.42, 0.16, 0.08, 'light', [side * 0.6, 1.12, -2.18]));               // tail lights
-    c.pair(side => c.box(0.16, 0.1, 0.06, 'light', [side * 1.0, 1.4, 0.6]));                   // mirrors
-    c.pair(side => c.box(0.04, 0.06, 2.6, 'light', [side * 0.95, 1.12, -0.1]));                // side moulding
-    c.pair(side => c.cyl(0.05, 2.2, 'dark', [side * 0.45, 0.25, -1.0], [Math.PI / 2, 0, 0]));  // exhaust
-    c.pair(side => c.cyl(0.07, 0.3, 'light', [side * 0.45, 0.25, -2.25], [Math.PI / 2, 0, 0])); // tips
+    const p = c.p;
+    const bumperY = p.bodyY - p.bodyH * 0.24;
+    c.box(p.width * 1.02, 0.24, 0.20, 'base', [0, bumperY, p.noseZ - 0.10]);   // front bumper
+    c.box(p.width * 1.02, 0.24, 0.20, 'base', [0, bumperY, p.tailZ + 0.10]);   // rear bumper
+    c.box(p.width * 0.70, 0.28, 0.10, 'dark', [0, p.bodyTop - 0.12, p.noseZ - 0.14]); // grille
+    c.pair(side => c.cyl(0.16, 0.10, 'light', [side * (p.width * 0.36), p.bodyTop - 0.07, p.noseZ - 0.12], [Math.PI / 2, 0, 0])); // headlights
+    c.pair(side => c.box(0.42, 0.16, 0.08, 'light', [side * (p.width * 0.33), p.bodyTop, p.tailZ + 0.12]));                       // tail lights
+    c.pair(side => c.box(0.16, 0.10, 0.06, 'light', [side * (p.width * 0.50), p.bodyTop + p.cabinH * 0.5, p.cabinZ + p.cabinLen / 2 - 0.15])); // mirrors
+    c.pair(side => c.box(0.04, 0.06, p.length * 0.54, 'light', [side * (p.width * 0.50), p.bodyY + 0.13, 0]));                    // side moulding
+    // Exhaust from under the engine out past the rear bumper.
+    const pipeFront = p.engineZ - 0.4;
+    const pipeLen = Math.max(0.6, pipeFront - (p.tailZ + 0.2));
+    c.pair(side => c.cyl(0.05, pipeLen, 'dark', [side * 0.45, p.frameY - 0.11, pipeFront - pipeLen / 2], [Math.PI / 2, 0, 0]));
+    c.pair(side => c.cyl(0.07, 0.30, 'light', [side * 0.45, p.frameY - 0.11, p.tailZ + 0.05], [Math.PI / 2, 0, 0]));
   },
 };
